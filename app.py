@@ -3,189 +3,77 @@ import os
 import json
 import hashlib
 import re
+import torch
+from io import BytesIO
 import io
-import textwrap
-from PIL import Image, ImageDraw, ImageFont, ImageFilter, ImageEnhance, ImageOps
-import time
-import base64
-def get_encoded_logo():
-    if os.path.exists("logo.png"):
-        with open("logo.png", "rb") as image_file:
-            return base64.b64encode(image_file.read()).decode()
-    return None
-if "show_splash" not in st.session_state:
-    st.session_state.show_splash = True
-    st.session_state.splash_start_time = time.time()
-SPLASH_DURATION = 3
-def show_splash():
-    with open("logo.png", "rb") as image_file:
-        encoded_logo = base64.b64encode(image_file.read()).decode()
-    
-    st.markdown(
-        f"""     
-        <style>
-        html, body, .stApp, .AppHost {{
-            height: 100%;
-            margin: 0;
-            padding: 0;
-            background-color: #071F2A;
-        }}
-        .logo-container {{
-            background-color: #071F2A;
-            display: inline-block;
-            padding: 2px;
-            border-radius: 8px;
-        }}
-        @keyframes pulseZoom {{
-            0% {{
-                transform: scale(1);
-                opacity: 1;
-            }}
-            50% {{
-                transform: scale(1.4);
-                 opacity: 0.85;
-            }}
-            100% {{
-                transform: scale(1);
-                 opacity: 1;
-            }}
-        }}
-        .pulse-zoom {{
-            animation-name: pulseZoom;
-            animation-duration: 2.5s;
-            animation-iteration-count: infinite;
-            animation-timing-function: ease-in-out;
-            animation-fill-mode: forwards;
-            will-change: transform, opacity;                      
-            filter: saturate(1.1) contrast(1.05);
-            box-shadow: none;
-        }}
-        
-        </style>
-        <div style="display:flex; justify-content:center; align-items:center; height:80vh; flex-direction:column;">
-            <img src="data:image/png;base64,{encoded_logo}" class="pulse-zoom" style="width:100px; height:100px;" />
-            <h2 style="color:#2563EB; font-family: 'Inter' sans-serif; margin-top: 2px; padding-left: 12px;">Ad-Box</h2>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
-if st.session_state.show_splash:
-    show_splash()
-    elapsed = time.time() - st.session_state.splash_start_time
-    if elapsed > SPLASH_DURATION:
-        st.session_state.show_splash = False
-        st.rerun()
-    else:
-        time.sleep(0.1)
-        st.rerun()
-    st.stop()
+import pandas as pd
+from PIL import Image, ImageOps, ImageFilter, ImageEnhance
+from PIL import ImageFilter
+from fpdf import FPDF
+import easyocr
+import difflib
+import pymupdf as fitz
+from transformers import pipeline
+import numpy as np
+from difflib import SequenceMatcher
+import nltk
+import logging
+from collections import Counter
 
-def get_cached_social_icon(filename, target_size):
-    main_folder_path = filename
-    asset_folder_path = os.path.join("assets", filename)
-    if os.path.exists(main_folder_path):
-        final_path = main_folder_path
-    elif os.path.exists(asset_folder_path):
-        final_path = asset_folder_path
-    else:
-        return None
-    try:
-        icon_img = Image.open(final_path).convert("RGBA")
-        return icon_img.resize((target_size, target_size), Image.Resampling.LANCZOS)
-    except:
-        return None
-@st.cache_data(show_spinner=False)
-def simple_image_cache(file_bytes):
-    if file_bytes is None:
-        return None
-    try:
-            
-        img = Image.open(io.BytesIO(file_bytes))
-        MAX_PREVIEW_WIDTH = 1080
-        if img.width > MAX_PREVIEW_WIDTH:
-            scale_ratio = MAX_PREVIEW_WIDTH / float(img.width)
-            target_height = int(float(img.height) * float(scale_ratio))
-            img = img.resize((MAX_PREVIEW_WIDTH, target_height), Image.Resampling.BILINEAR)
-        return img.convert("RGB")
-    except:
-        return None
-if "ad-box_active_canvas" not in st.session_state:
-    st.session_state["ad-box_active_canvas"] = None
-processed_layer = st.session_state["ad-box_active_canvas"]
-   ##############################################
+logging.basicConfig(level=logging.INFO)
+try:
+    nltk.data.find('tokenizers/punkt')
+except LookupError:   
+    nltk.download('punkt')
+#session state initialization##################################
+st.set_page_config(page_title="FinanceBox AI", layout="wide")
 if "logged_in" not in st.session_state:
     st.session_state.logged_in = False
 if "reset_trigger" not in st.session_state:
     st.session_state.reset_trigger = False
-
-if st.session_state.logged_in:
-    st.set_page_config(page_title="Ad-Box - Dashboard", layout="wide")
-else:
-    st.set_page_config(page_title="Ad-Box - Welcome", layout="centered")
-##################################################################################################################3
-DB_FILE = "user_database_profiles.json"
-@st.cache_data(show_spinner=False)
-def load_local_database():
-    if os.path.exists(DB_FILE):
-        try:
-            with open(DB_FILE, "r") as f:
-                return json.load(f)
-        except Exception:
-            pass
-    return {
-        "demo_user": hashlib.sha256(str.encode("Admin@123")).hexdigest()
-    }
-def save_to_local_database(db_dict):
-    try:
-        with open(DB_FILE, "w") as f:
-            json.dump(db_dict, f, indent=4)
-        return True
-    except Exception:
-        return False
-
-                    
 if "user_db" not in st.session_state:
+    DB_FILE = "user_database_profiles.json"
+    
+    @st.cache_data(show_spinner=False)
+    def load_local_database():
+        if os.path.exists(DB_FILE):
+            try:
+                with open(DB_FILE, "r") as f:
+                    return json.load(f)
+            except Exception:
+                logging.error("Failed to load user database JSON file.")
+                pass
+        salt, hashed_pw = hash_password("Admin@123")
+        return {"demo_user": {"salt": salt, "hash": hashed_pw}}
+        
     st.session_state.user_db = load_local_database()
-
+    
 if "current_user" not in st.session_state:
     st.session_state.current_user = None
 if "auth_page" not in st.session_state:
     st.session_state.auth_page = "Login"
-        
-if "ga_headline" not in st.session_state: st.session_state.ga_headline = ""
-if "ga_font_scale" not in st.session_state: st.session_state.ga_font_scale = 32
-if "ga_font_style" not in st.session_state: st.session_state.ga_font_style = "Sans-Serif (Clean)"
-if "ga_text_pos" not in st.session_state: st.session_state.ga_text_pos = "Bottom Third"
-if "ga_veil_opacity" not in st.session_state: st.session_state.ga_veil_opacity = 25
-if "ga_filter_lut" not in st.session_state: st.session_state.ga_filter_lut = "Original (None)"
-if "ga_blur" not in st.session_state: st.session_state.ga_blur = 0
-if "ga_brightness" not in st.session_state: st.session_state.ga_brightness = 1.0
-if "ga_contrast" not in st.session_state: st.session_state.ga_contrast = 1.0
-if "ga_border_width" not in st.session_state: st.session_state.ga_border_width = 0
-if "ga_border_mode" not in st.session_state: st.session_state.ga_border_mode = "Solid Match Token"
-if "ga_custom_border_hex" not in st.session_state: st.session_state.ga_custom_border_hex = "#FFFFFF"
-if "ga_text_pos_preset" not in st.session_state: st.session_state.ga_text_pos_preset = "Custom Manual Position"
-#if "ga_text_color_mode" not in st.session_state: st.session_state.ga_text_color_mode = "Match Token Color"
-if "ap_footer_font_scale" not in st.session_state: st.session_state.ap_footer_font_scale = 35    
-if "mf_ratio" not in st.session_state: st.session_state.mf_ratio = "Original Ratio"
-if "ap_enforce_strip" not in st.session_state: st.session_state.ap_enforce_strip = False
-if "ap_watermark_text" not in st.session_state: st.session_state.ap_watermark_text = "CONFIDENTIAL BRAND ASSET"
-
-if "ad_enable_cta" not in st.session_state: st.session_state.ad_enable_cta = False
-if "ad_cta_label" not in st.session_state: st.session_state.ad_cta_label = "Shop Now"
-if "ad_cta_x" not in st.session_state: st.session_state.ad_cta_x = 65
-if "ad_cta_y" not in st.session_state: st.session_state.ad_cta_y = 80
-
-if "ga_text_x_pct" not in st.session_state: st.session_state.ga_text_x_pct = 8
-if "ga_text_y_pct" not in st.session_state: st.session_state.ga_text_y_pct = 76
-if "tiktok_ui_toggle_widget" not in st.session_state: st.session_state.tiktok_ui_toggle_widget = False
-if "insta_ui_toggle_widget" not in st.session_state: st.session_state.insta_ui_toggle_widget = False
-if "enable_global_cta_toggle" not in st.session_state: st.session_state.enable_global_cta_toggle = False
-########### ########################   ##########################################################################################################
-def hash_password(password):
-    return hashlib.sha256(str.encode(password)).hexdigest()
-
+if "chat_history" not in st.session_state:
+    st.session_state.chat_history = []
+#password utilities############################################################
+def hash_password(password, salt=None):
+    """
+    Hash a password with optional salt.
+    Returns (salt, hash_password).
+    """
+    if salt is None:
+        salt = os.urandom(16).hex()
+    hashed = hashlib.sha256((salt + password).encode()).hexdigest()
+    return salt, hashed
+def verify_password(stored_salt, stored_hash, password_attempt):
+    """
+    Verify password by hashing attempt with stored salt and comparing to stored hash.
+    """
+    _, attempt_hash = hash_password(password_attempt, stored_salt)
+    return attempt_hash == stored_hash
 def check_password_strength(password):
+    """
+    Check password strength with multiple criteria.
+    """
     if len(password) < 8:
         return False, "Password must be at least 8 characters long."
     if not re.search(r"[A-Z]", password):
@@ -198,11 +86,37 @@ def check_password_strength(password):
         return False, "Password must contain at least one special character."
     return True, "Strong password!"
 
-##########################################################################################################3
+def validate_username(username):
+    """
+    validate username with rules:
+    -8 to 20 characters
+    -letters, numbers, underscores only
+    """
+    if not 3 <= len(username) <= 20:
+        return False, "Username must be between 8 and 20 characters."
+    if not re.match(r"^\w+$", username):
+        return False, "Username can only contain letters, numbers, and underscores."
+    return True, ""
+def save_to_local_database(db_dict):
+    """
+    Save user database dictionary to JSON file.
+    """
+    DB_FILE = "user_database_profiles.json"
+    try:
+        with open(DB_FILE, "w") as f:
+            json.dump(db_dict, f, indent=4)
+        return True
+    except Exception:
+        logging.error(f"Failed to save user database: {e}")
+        return False
+#ui login style################################################################################################
 def inject_login_styles():
+    """
+    custom css styles for login and app ui
+    """
     st.markdown("""
         <style>
-        html, body, .stApp, .AppHost [data-testid="stApp"] { background: radial-gradient(circle at top right, #0F172A, #020617) !important; }
+        html, body, .stApp, .AppHost [data-testid="stApp"] { background: radial-gradient(circle at top right,  #0F172A, #020617) !important; }
         
         div[data-testid="element-container"] + div[data-testid="element-container"] {
             background: transparent !important;
@@ -211,7 +125,7 @@ def inject_login_styles():
         }
         
         .stMain h1, stMain h2, stMain h3, stMain p, stMain label {
-            color: #F8FAFC !important;
+            color: white !important;
             font-family: 'Inter', sans-serif !important;
         }
         h1, [data-testid="stMarkdownContainer"] h1 {
@@ -248,7 +162,7 @@ def inject_login_styles():
         }
         div.stButton > button[kind="secondary"] :hover{
             background-color: rgba(255, 255, 255, 0.08) !important;
-            color: #FFFFFF !important;
+            color: white !important;
             border-color: #475569 !important;
         }
         div[data-baseweb="input"],
@@ -259,258 +173,487 @@ def inject_login_styles():
         }
         
         div[data-baseweb="input"] input {
-            color: #FFFFFF !important;
-            -webkit-text-fill-color: #FFFFFF !important;
+            color: white !important;
+            -webkit-text-fill-color: white !important;
+        }
+        input::placeholder {
+            color: #ccc !important;
+        }
+        textarea {
+            color: white !important;
         }
         input:-webkit-autofill,
         input:-webkit-autofill:hover,
         input:-webkit-autofill:focus,
         div[data-baseweb="input"] input:focus {
-            -webkit-text-fill-color: #FFFFFF !important;
+            -webkit-text-fill-color: white !important;
             -webkit-box-shadow: 0 0 0px 1000px #0F172A !important;
             transition: background-color 5000s ease-in-out 0s !important;
         }
-        section[data-testid="stSidebar"],
-        [data-testid="stSidebarCollapsedControl"],
-        button[data-testid="stSidebarCollapseButton"] {
-            display: none !important;
-            visibility: hidden !important;
-            width: 0px !important;
+        body, .stApp, .css-1d391kg, css-1v3fvcr, css-1d391kg * {
+            color: white !important;
+        }
+        div[data-testid="metric-container"] span[data-testid="stMetricValue"] {
+            color: white !important;
+            font-weight: 700 !important;
+            font-size: 1.5rem !important;
         }
         </style>
     """, unsafe_allow_html=True)
-    
-def inject_core_dashboard_styles():
-    
-    st.markdown(f"""
-            <style>
-            html, body, .stApp {{ background-color: #020617 !important; color: #F8FAFC !important; }}
-            [data-testid="stHeader"] {{ background-color: rgba(2, 6, 23, 0.8) !important; backdrop-filter: blur(12px); border-bottom: 1px solid #1E293B !important; }}
-            
+#OCR and pdf text extraction############################################
+@st.cache_data(show_spinner=False)
+def load_easyocr_reader():
+    """
+    load easyocr reader with english language and gpu if available
+    """
+    return easyocr.Reader(['en'], gpu=torch.cuda.is_available())
 
-            div[data-testid="stMainBlockContainer"] {{ 
-                padding-top: 1rem !important;
-                padding-bottom: 1rem !important;
-                max-width: 98% !important;
-            }}
-            
-            div[data-testid="stFileUploader"] section {{
-                 border: none !important;
-                 background-color: #0F172A !important;
-                 border-radius: 12px !important;
-                 padding: 20px !important;
-            }}
-            div[data-testid="stFileUploader"] label,  div[data-testid="stFileUploader"] p {{
-                 color: #3B82F6 !important;
-            
-            }}
-            div[data-testid="stHorizontalBlock"] {{
-                display: flex !important;
-                flex-direction: row !important;
-                flex-wrap: nowrap !important;
-                gap: 4rem !important;
-                width: 100% !important;
-                align-items: flex-start !important;
-                margin-top: 0rem !important;
-                padding-top: 0rem !important;
-            }}
-                
-            div[data-testid="stHorizontalBlock"] > div:first-child {{
-                top: 0.5rem !important;
-                min-width: 48% !important;
-                max-width: 48% !important;
-                flex: 0 0 48% !important;
-                position: sticky !important;
-                max-height: calc(100vh - 6rem) !important;
-                overflow-y: auto !important;
-                overflow-x: hidden !important;
-            }}
-            div[data-testid="stHorizontalBlock"] > div:last-child {{
-                flex: 0 0 48% !important;
-                min-width: 48% !important;
-                max-width: 48% !important;
-                max-height: calc(100vh - 1.5rem) !important;
-                overflow-y: auto !important;
-                overflow-x: hidden !important;
-            }}
-            @media (max-width: 600px) {{
-                div[data-testid="stHorizontalBlock"] {{
-                    flex-direction: column !important;
-                    gap: 1.5rem !important;
-                }}
-                div[data-testid="stHorizontalBlock"] > div:first-child,
-                div[data-testid="stHorizontalBlock"] > div:last-child {{
-                    flex: 0 0 100% !important;
-                    min-width: 100% !important;
-                    max-width: 100% !important;
-                    max-height: none !important;
-                    position: relative !important;
-                }}
-            }}    
-            div[data-baseweb="input"],
-            div[data-baseweb="base-input"],
-            div[data-baseweb="select"],
-            div[data-baseweb="select"] > div {{
-                background-color: #0F172A !important;
-                border: none !important;
-                color: #FFFFFF !important;
-                box-shadow: none !important;
-            }}
-            div[data-baseweb="input"] input,
-            div[data-baseweb="select"] span,
-            div[data-baseweb="select"] div {{
-                color: #FFFFFF !important;
-                -webkit-text-fill-color: #FFFFFF !important;
-            }}
-            .export-box-row {{
-                display: flex !important;
-                flex-direction: row !important;
-                align-items: flex-end !important;
-                gap: 12px !important;
-                width: 100% !important;
-                margin-top: 15px !important;
-            }}
-            .export-box-row > div {{
-                flex: 1 !important;
-            }}
-            div[data-testid="stHorizontalBlock"] button[data-testid="baseButton-primary"],
-            div[data-testid="stHorizontalBlock"] div.stDownloadButton button,
-            div[data-testid="stHorizontalBlock"] button[data-testid="BaseButton-primary"] {{
-                background: linear-gradient(135deg, #1E40AF, #2563EB) !important;
-                color: #FFFFFF !important;
-                border: none !important;
-                border-radius: 8px !important;
-                height: 42px !important;
-                width: 100% !important;
-                font-weight: 600 !important;
-                box-shadow: 0 4px 12px rgba(29,78,216,0.3) !important;
-            }}
-            label[data-testid="stWidgetLabel"] p {{
-                color: #CBD5E1 !important;
-                font-weight: 500 !important;
-            }}
-            
-            h3 {{
-                color: #3B82F6 !important;
-                border: none !important;
-                margin-top: 30px !important;
-                margin-bottom: 10px !important;
-            }}
-            div[data-testid="stVerticalBlockBorderWrapper"] {{
-                border: none !important;
-                background-color: transparent !important;
-                padding: 0px !important;
-            }}
-            section[data-testid="stSidebar"], div[data-testid="stSidebarContent"], [data-testid="stSidebar"] {{
-                background-color: #0B111E !important;
-                border-right: 1px solid #1E3A8A !important;
-            }}
-            [data-testid="stSidebar"] h1, [data-testid="stSidebar"] h2, [data-testid="stSidebar"] h3, [data-testid="stSidebar"] p {{
-                color: #FFFFFF !important;
-            }}
-            [data-testid="stSidebar"] [data-testid="stMarkdownContainer"] {{
-                color: #CBD5E1 !important;
-            }}
-            div[data-testid="stImage"] {{
-               position: relative !important;
-               overflow: visible !important;
-               background-color: transparent;
-            }}
-            body:not(:has([data-testid="stFullscreenLightbox"])) div[data-testid="stImage"] button[data-testid="StyledFullScreenButton"] {{
-                position: absolute !important;
-                top: 15px !important;
-                right: 15px !important;
-                z-index: 99999999 !important;
-                display: inline-flex !important;
-                visibility: visible !important;
-                opacity: 1 !important;
-                border-radius: 50% !important;
-                padding: 8px !important;
-                background-color: rgba(15, 23, 42, 0.8) !important;
-                box-shadow: 0 4px 12px rgba(0,0,0,0.6) !important;
-                
-            }}
-            body:has([data-testid="stFullscreenLightbox"]) button[id="MainMenu"],
-            body:has([data-testid="stFullscreenLightbox"]) [data-testid="stHeader"] {{
-                display: none !important;
-                visibility: hidden !important;
-                opacity: 0 !important;
-                width: 0px !important;
-                height: 0px !important;
-            }}
-            body:has([data-testid="stFullscreenLightbox"]) button[data-testid="StyledFullScreenButton"] {{
-                position: fixed !important;
-                top: 15px !important;
-                right: 15px !important;
-                background-color: rgba(15, 23, 42, 0.85) !important;
-                border: 1px solid rgba(255, 255, 255, 0.2) !important;
-                border-radius: 50% !important;
-                display: inline-flex !important;
-                visibility: visible !important;
-                opacity: 1 !important;
-                z-index: 9999999999 !important;
-                width: 40px !important;
-                height: 40px !important;
-            }}
-            body:has([data-testid="stFullscreenLightbox"]) div[data-testid="stHorizontalBlock"] > div:last-child,
-            body:has([data-testid="stFullscreenLightbox"]) [role="widget"],
-            body:has([data-testid="stFullscreenLightbox"]) div[data-baseweb="slider"],
-            body:has([data-testid="stFullscreenLightbox"]) div[class*="stSlider"],
-            body:has([data-testid="stFullscreenLightbox"]) .stHorizontalBlock {{
-                display: none !important;
-                visibility: hidden !important;
-                opacity: 0 !important;
-                height: 0px !important;
-                width: 0px !important;
-                overflow: hidden !important;
-            }}
-            
-            div[data-testid="stFullscreenLightbox"] {{
-                z-index: 9999999999 !important;
-                background-color: #020617 !important;
-                position: fixed !important;
-                top: 0 !important; left: 0 !important; width: 100vw !important; height: 100vh !important;
-                display: flex !important; align-items: center !important; justify-content: center !important;
-            }}
-            div[data-testid="stFullscreenLightbox"] img {{
-                display: block !important; visibility: visible !important; opacity: 1 !important;
-                max-width: 100vw !important; max-height: 100vh !important; margin: auto !important;
-            }}
-            [data-testid="stHeader"] {{
-                background-color: transparent !important;
-                background: none !important;
-                backdrop-filter: none !important;
-                border-bottom: none !important;
-                box-shadow: none !important;
-            }}
-            
-            </style>
-            <script>
-            window.addEventListener('beforeunload', function (e) {{
-                e.preventDefault();
-                e.returnValue = 'Unsaved changes will be lost! Make sure to export your image first.';
-            }});
-            </script>
-    """, unsafe_allow_html=True)
+reader = load_easyocr_reader()
+
+def preprocess_image_for_ocr(image_bytes, contrast=2.0, unsharp_radius=2, unsharp_percent=150, unsharp_threshold=3, median_size=3, threshold_val=140):
+    """
+    preprocess image bytes for ocr by enhancing contrast, sharpening, denoising, thresholding, and resizing
+    """   
+    image = Image.open(io.BytesIO(image_bytes)).convert("L")
+    enhancer = ImageEnhance.Contrast(image)
+    image = enhancer.enhance(contrast)   
+    image = image.filter(ImageFilter.UnsharpMask(radius=unsharp_radius, percent=unsharp_percent, threshold=unsharp_threshold))
+    image = image.filter(ImageFilter.MedianFilter(size=median_size)) 
+    image = image.point(lambda p: 255 if p > threshold_val else 0)
+    base_width = 1200
+    wpercent = (base_width / float(image.size[0]))
+    hsize = int((float(image.size[1]) * float(wpercent)))
+    image = image.resize((base_width, hsize), Image.LANCZOS)
+    return image
+
+st.cache_data(show_spinner=False)
+def extract_text_from_image(file_bytes):
+    """
+    extract text from image bytes using multiple preprocessing settings and easyocr.
+    Combines results from different preprocessing variant for robustness
+    """
+    try:
+        preprocessed_images = []
+        preprocessed_images.append(preprocess_image_for_ocr(file_bytes, contrast=2.0, threshold_val=140))
+        preprocessed_images.append(preprocess_image_for_ocr(file_bytes, contrast=1.8, unsharp_radius=1, unsharp_percent=120, threshold_val=130))
+        preprocessed_images.append(preprocess_image_for_ocr(file_bytes, contrast=2.2, unsharp_radius=2, unsharp_percent=180, threshold_val=150))                           
         
+        ocr_results = []
+        for image in preprocessed_images:
+            result = reader.readtext(np.array(image), detail=0, paragraph=True)
+            ocr_results.append(" ".join(result).strip())            
+        combined_text = " ".join(" ".join(ocr_results).strip())
+        return combined_text if combined_text else "OCR_ERROR: No text was found"        
+    except Exception as e:
+        logging.exception("Image OCR failed")
+        return f"OCR_ERROR: {str(e)}"
+   
+@st.cache_data(show_spinner=False)
+def extract_text_from_pdf(file_bytes):
+    """
+    extract text from pdf bytes using pymupdf.Extracts text blocks from each page and concatenates
+    """
+    try:
+        pdf = fitz.open(stream=file_bytes, filetype="pdf")
+        full_text = []
+        for page in pdf:
+            blocks = page.get_text("blocks")
+            page_text = " ".join(block[4] for block in blocks if block[4].strip())
+            full_text.append(page_text)
+        raw_text = "\n".join(full_text)       
+        cleaned_text = clean_extracted_text(raw_text)          
+        return cleaned_text
+    except Exception as e:
+        logging.exception("PDF extraction failed")
+        return f"PDF_ERROR: {str(e)}"
 
-if not st.session_state.logged_in:
+def clean_extracted_text(text):
+    """
+    clean extracted text by normalizing white space and removing non-printable characters
+    """
+    text = re.sub(r"\s+", " ", text)
+    text = "".join(c for c in text if c.isprintable())
+    return text.strip()
+ #financial data helpers################################### 
+def clean_number(value_str):
+    """
+    clean and convert a string representing a number to float.Handle parentheses for negative numbers and removes common formatting characters
+    """
+    value_str = value_str.strip()
+    if value_str.startswith('(') and value_str.endswith(')'):
+        value_str = '-' + value_str[1:-1]
+    value_str = re.sub(r"[,\s\$€£]", "", value_str)
+    try:
+        return float(value_str)
+    except:
+        return None
+
+def extract_value_near_keyword(lines, idx, pattern, allow_negative=False):
+    """
+    search for numeric values near a keyword line within a window of lines returns the closest valid number found
+    """
+    window_size = 4
+    start = max(0, idx - window_size)
+    end = min(len(lines), idx + window_size + 1)
+    candidates = []
+    for i in range(start, end):
+        matches = re.findall(pattern, lines[i], re.IGNORECASE)
+        for match in matches:
+            val = clean_number(match)
+            if val is not None:
+                if allow_negative or val >= 0:
+                    candidates.append((val, abs(i - idx)))
+    if candidates:
+        candidates.sort(key=lambda x: (x[1], -abs(x[0])))
+        return candidates[0][0]
+    return None
+
+
+def fuzzy_match(keyword, text, threshold=0.85):
+    """
+    perfom fuzzy matching between keyword and text with a similarity threshold
+    """
+    ratio = difflib.SequenceMatcher(None, keyword.lower(), text.lower()).ratio()
+    return ratio >= threshold
+
+def parse_balance_sheet(text):
+    """
+    parse_balance_sheet data from text using keyword matching and value extraction
+    """
+    keywords = {      
+        "assets": [("total assets", 15), ("assets", 10), ("current assets", 12), ("non-current assets", 12), ("fixed assets", 10), ("property plant and equipment", 15), ("ppe", 10)],
+        "liabilities": [("total liabilities", 15), ("liabilities", 10), ("current liabilities", 12), ("long-term liabilities", 12), ("debt", 10), ("loans payable", 12), ("accounts payable", 10)],
+        "equity": [("total equity", 15), ("shareholders' equity", 15), ("stockholders' equity", 15), ("equity", 10), ("retained earnings", 12),("capital stock", 10), ("owner's equity", 12)]
+    }
+    data = {}
+    lines = text.splitlines()
+    number_pattern = r"\$?[\d,.]+"
+    for key, kw_list in keywords.items():
+        candidates = []
+        for idx, line in enumerate(lines):
+            line_lower = line.lower()
+            for kw, weight in kw_list:
+                
+                if kw in line_lower or fuzzy_match(kw, line_lower):         
+                    val = extract_value_near_keyword(lines, idx, number_pattern, allow_negative=False)
+                    if val is not None and val != 0:
+                        candidates.append((val, weight))
+        if candidates:
+            candidates.sort(key=lambda x: (-x[1], -x[0]))
+            data[key] = candidates[0][0]
+        else:        
+            data[key] = 0.0
+    return data
+
+def parse_income_statement(text):
+    """
+    parse_income_statement data from text using keyword matching and value extraction
+    """
+    keywords = {      
+        "revenue": [("revenue", 15), ("sales", 15), ("total sales", 15), ("turnover", 12), ("net sales", 12), ("operating revenue", 12), ("gross revenue", 12)],
+        "expenses": [("expenses", 15), ("operating expenses", 15), ("cost of goods sold", 15), ("cogs", 15), ("selling expenses", 12), ("administrative expenses", 12), ("general expense", 12), ("research and development", 10), ("r&d expenses", 10)],
+        "net_income": [("net income", 20), ("net profit", 20), ("profit", 18), ("net earnings", 18), ("net loss", 15), ("earnings", 15), ("bottom line", 15), ("income after tax", 15), ("net operating income", 15), ("comprehensive income", 12), ("profit after tax", 15), ("loss", 15)]
+    }
+    data = {}
+    lines = text.splitlines()
+    number_pattern = r"\$?[\d,.]+"
+    for key, kw_list in keywords.items():
+        candidates = []
+        for idx, line in enumerate(lines):
+            line_lower = line.lower()
+            for kw, weight in kw_list:
+                if kw in line_lower or fuzzy_match(kw, line_lower):
+                    allow_negative = (key == "net_income")
+                    val = extract_value_near_keyword(lines, idx, number_pattern, allow_negative=allow_negative)
+                    if val is not None:
+                        candidates.append((val, weight))
+        if candidates:
+            candidates.sort(key=lambda x: (-x[1], -abs(x[0])))
+            data[key] = candidates[0][0]
+        else:        
+            data[key] = 0.0
+    return data
+
+def generate_summary(data):
+    """
+    generate a simple textual summary of key financial data points.
+    """
+    points = []
+    if "net_income" in data:
+        points.append(f"Net Income: ${data.get('net_income', 0):,.2f}.")
+    if "revenue" in data:
+        points.append(f"Revenue: ${data.get('revenue', 0):,.2f}.")
+    if "expenses" in data:
+        points.append(f"Expenses: ${data.get('expenses', 0):,.2f}.")
+    if "assets" in data:
+        points.append(f"Total Asssets: ${data.get('assets', 0):,.2f}.")
+    if "liabilities" in data:
+        points.append(f"Total Liabilities: ${data.get('liabilities', 0):,.2f}.")
+    if "equity" in data:
+        points.append(f"Total Equity: ${data.get('equity', 0):,.2f}.")
+    return points
+
+#Transformer pipelines and document classification##################################
+@st.cache_resource(show_spinner=False)
+def load_transformer_pipelines():
+    """
+    load transformer pipelines for classifications and ner
+    """
+    classifier = pipeline("text-classification", model="distilbert-base-uncased-fintuned-sst-2-english")
+    ner = pipeline("ner", grouped_entities=True)
+    return classifier, ner
+
+classifier, ner = load_transformer_pipelines()
+
+def chunk_text(text, max_tokens=512, overlaps=50):
+    """
+    split text into overlapping chunks of max_token tokens for transformer input
+    """
+    word = nltk.word_tokenize(text)
+    chunks = []
+    start = 0
+    while start < len(words):
+        end = min(start + max_tokens, len(words))
+        chunks.append(" ".join(words[start:end]))
+        if end == len(words):
+            break
+        start = end - overlap
+    return chunks
+    
+def detect_document_type(text):
+    """
+    transformer based document classification with fallback
+    """
+    if not text:
+        return "unsupported"
+    try:
+        chunks = chunk_text(text)
+        labels = []
+        for chunk in chunks:
+            results = classifier(chunk)
+            label.append(results[0]['label'].lower())
+        most_common_label = Counter(labels).most_common(1)[0][0]
+        if "balance" in most_common_label:
+            return "balance_sheet"
+        elif "income" in most_common_label or "profit" in most_common_label:
+            return "income_statement"
+        else:
+            return detect_document_type_keyword(text)
+    except Exception as e:
+        logging.error(f"Transformers classification failed: {e}")
+        return detect_document_type_keyword(text)
+    
+def extract_financial_entities_transformer(text):
+    """
+    extract financial entities using transformer ner
+    """
+    try:
+        chunks = chunk_text(text)
+        all_entities = []
+        money_values = []
+        for chunk in chunks:
+            entities = ner(chunk)
+            all_entities.extend(entities)
+        return all_entities
+    except Exception as e:
+        logging.error(f"Transformers NER failed: {e}")
+        return []
+    
+def detect_document_type_keyword(text):
+    """
+    fallback keyword based document type detection
+    """
+    text_lower = text.lower()
+    if any(k in text_lower for k in ["balance sheet", "assets", "liabilities"]):
+        return "balance_sheet"
+    elif any(k in text_lower for k in ["income statement", "profit", "revenue", "expenses"]):
+        return "income_statement"
+    else:
+        return "unsupported"    
+    
+def parse_financial_data(text, doc_type):
+    """
+    combined transformer ner and keyword parsing to extract financial data.
+    """
+    transformer_data = extract_financial_entities_transformer(text)
+    if doc_type == "balance_sheet":
+        keyword_data = parse_balance_sheet(text)
+    elif doc_type == "income_statement":
+        keyword_data = parse_income_statement(text)
+    else:
+        keyword_data = {}
+    if transformer_data.get("money_values"):
+        logging.info(f"Transformer detected money entities: {transformer_data}")
+    return keyword_data
+
+######chatbot UI and Logic#################################
+
+def load_chatbot():
+    """
+    load text generation pipeline for chatbot.
+    """
+    return pipeline("text-generation", model="distilgpt2")
+
+def build_finance_prompt(user_question: str, financial_data: dict, doc_type: str, chat_history: list) -> str:
+    """
+    buit prompt for chatbot with system instructions and financial data summary.
+    """
+    system_instructions = (
+        "You are a professional financial assistant. "
+        "Answer clearly and concisely based only on the financial data provided. "
+        "If you don't know the answer, say so politetly. "
+        "Explain financial terms simply and provide actionable advice when possible."
+    )
+    data_summary_lines = []
+    if doc_type == "balance_sheet":
+        for key in ["assets", "liabilities", "equity"]:
+            if key in financial_data:
+                val = financial_data[key]
+                data_summary_lines.append(f"{key.title()}: ${val:,.2f}")
+    elif doc_type == "income_statement":
+        for key in ["revenue", "expenses", "net_income"]:
+            if key in financial_data:
+                val = financial_data[key]
+                data_summary_lines.append(f"{key.replace('_', ' ').title()}: ${val:,.2f}")
+    else:
+        data_summary_lines.append("No financial data available.")
+    data_summary = "\n".join(data_summary_lines)
+    #Include last few users and bot messages for context (up to last 6)############################
+    context = ""
+    for msg in chat_history[-6:]:
+        role = "User" if msg["role"] == "user" else "AI"
+        context += f"{role}: {msg['content']}\n"
+    prompt = (
+        f"{system_instructions}\n\n"
+        f"Financial data:\n{data_summary}\n\n"
+        f"Conversation history:\n{context}\n"
+        f"User question: {user_question}\n"
+        f"Answer:"
+    )
+    return prompt[-3000:] if len(prompt) > 3000 else prompt
+
+def suggest_follow_ups(doc_type: str, financial_data: dict) -> list:
+    """
+    suggest follow up questions based on document type and financial data.
+    """
+    suggestions = []
+    question_lower = last_user_question.lower()
+    if doc_type == "balance_sheet":
+        if "debt" in question_lower or "liabilities" in question_lower:
+            suggestions.append("Would you like me to explain how debt affects your health?")
+        if financial_data.get("liabilities", 0) > financial_data.get("equity", 0):
+            suggestions.append("Your liabilities exceed equity, would you like advice on managing financial risk?")
+    elif doc_type == "income_statement":
+        if "profit" in question_lower or "net_income" in question_lower:
+            suggestions.append("Would you like a summary of profit margins?")
+        if financial_data.get("net_income", 0) < 0:
+            suggestions.append("Your net income is negative, would you like suggestions to improve profitability?")
+    else:
+        suggestions.append("Feel free to ask any questions about your financial document.?")
+    return suggestions
+        
+def chatbot_ui():
+    """
+    streamlit UI for chatbot interaction.
+    """
+    st.subheader("Chat with AI")
+    st.markdown("""
+    <style>
+    div.stButton > button {
+        margin-top: 26px !important;
+        height: 36px !important;
+    }
+    div.st.TextInput > div > input {
+        height: 36px !important;
+    }
+    </style>
+    """, unsafe_allow_html=True)
+    
+    if st.session_state.get("clear_input", False):
+        st.session_state.chat_input = ""
+        st.session_state.clear_input = False
+    col1, col2 = st.columns([0.9, 0.1])
+    user_input = col1.text_input("ask financeBox AI about your fianacial doc", key="chat_input", placeholder="E.g., What is my net income?")
+    
+    send_clicked = col2.button("Send", key="send_button")    
+    if send_clicked and user_input.strip():
+        st.session_state.chat_history.append({"role": "user", "content": user_input})
+        prompt = build_finance_prompt(user_input.strip(), financial_data, doc_type, st.session_state.chat_history)
+        try:
+            chatbot = load_chatbot()
+            response = chatbot(prompt, max_length=150, num_return_sequences=1, do_sample=True, temperature=0.7, pad_token_id=50256)
+            bot_reply = response[0]["generated_text"].strip()
+            
+            if bot_reply.lower().startswith(prompt.lower()):
+                bot_reply = bot_reply[len(prompt):].strip()
+        except Exception as e:
+            bot_reply = f"Sorry, AI could not respond right now. Error: {str(e)}"
+            logging.error(f"Chatbot error: {e}")
+        st.session_state.chat_history.append({"role": "bot", "content": bot_reply})
+        st.session_state.clear_input = True
+        st.rerun()
+        
+    if st.session_state.chat_history:
+        st.markdown("### Conversation")
+        for msg in st.session_state.chat_history:
+            if msg["role"] == "user":
+                st.markdown(f"**You:** {msg['content']}")
+            else:
+                st.markdown(f"**AI:** {msg['content']}")
+         #get last user question for suggestions############################################################################################       
+        last_question = ""
+        for msg in reversed(st.session_state.chat_history):
+            if msg["role"] == "user":
+                last_question = msg["content"]
+                break
+        suggestions = suggest_follow_ups(doc_type, financial_data, last_question)
+        if suggestions:
+            st.markdown("### suggestions")
+            for s in suggestions:             
+                if st.button(s):
+                    st.session_state.chat_input = s
+                    st.session_state.clear_input = False
+                    st.rerun()
+#Privacy and data control ui###########################################################################################                    
+def privacy_and_data_control_ui():
+    st.sidebar.markdown("### Privacy & Data Control")
+    st.sidebar.info("""
+    - Your uploaded documents are processed locally and not stored permanently.
+    - Chat history is stored only for your current session and can be cleared anytime.
+    - AI responses are generated based on extracted financial data; please verify critical decisions.
+    """)
+    if st.sidebar.button("Clear Chat History"):
+        st.session_state.chat_history = []
+        st.sidebar.success("Chat history cleared.")
+        
+def show_user_list():
+    st.subheader("Registered Users")
+    user_db = st.session_state.user_db
+    total_users = len(user_db)
+    st.write(f"Total registered users: {total_users}")
+    st.write("User List:")
+    for username in user_db.keys():
+        st.write(f"- {username}")
+#Main UI functions###########################                    
+def clear_chat():
+    if st.confirm("Are you sure you want to clear the chat history?"):
+        st.session_state.chat_history = []
+        
+def login_ui():
+    """
+    streamlit UI for login, registration, and password reset.
+    """
     inject_login_styles()
     st.markdown("""
         <div style="text-align: center; margin-top: 5px; margin-bottom: 5px; width: 100%; display: block;">
-            <h1 style="font-size: 48px; font-weight: 900; color: blue !important; margin: 0; padding: 0;">Ad-Box</h1>       
-            <p style="text-align: center"; "color: blue !important"; font-size: 18px; margin-top: 4px;">Your Ad Studio Toolbox</p>
+            <h1 style="font-size: 48px; font-weight: 900; color: blue !important; margin: 0; padding: 0;">FinanceBox AI </h1>       
+            <p style="text-align: center"; "color: blue !important"; font-size: 18px; margin-top: 4px;">Minimalist Document Analyst</p>
         </div>
     """, unsafe_allow_html=True)
 
-
-    
-    
-    if st.session_state.auth_page == "Login":
-    
-        login_user = st.text_input("Username / Email", key="l_user", placeholder="Enter your details")
-        login_password = st.text_input("password", type="password", key="l_password", placeholder="1234@adcraft")
-        
+    if st.session_state.auth_page == "Login":   
+        login_user = st.text_input("Username / Email", key="l_user", placeholder="Enter username")
+        login_password = st.text_input("password", type="password", key="l_password", placeholder="Enter password")       
         col1, col2 = st.columns(2)
         with col1:
             if st.button("Forgot Password?", type="secondary"):
@@ -518,866 +661,201 @@ if not st.session_state.logged_in:
                 st.rerun()
         with col2:
             if st.button("Create Account", type="secondary"):
-                st.session_state.auth_page = "Register"
-                st.rerun()       
-            
-        if st.button("Login to Ad-Box", type="primary"):  
-            hashed_input = hash_password(login_password)
-            if login_user in st.session_state.user_db and st.session_state.user_db[login_user] == hashed_input:
-                st.session_state.logged_in = True
-                st.session_state.current_user = login_user
-                st.session_state.is_admin = (login_user == "demo_user")
-                st.rerun()
+               st.session_state.auth_page = "Register"
+               st.rerun()                   
+        if st.button("Login FinanceBox AI", type="primary"):  
+            if login_user in st.session_state.user_db:
+                stored = st.session_state.user_db[login_user]
+                if isinstance(stored, dict) and "salt" in stored and "hash" in stored:
+                    if verify_password(stored["salt"], stored["hash"], login_password):
+                        st.session_state.logged_in = True
+                        st.session_state.current_user = login_user
+                        st.session_state.is_admin = (login_user == "demo_user")
+                        st.rerun()
+                    else:
+                        st.error("Incorrect password or email. Try again.")
+                else:
+                    st.error("User data corrupted. Please contact admin.")
             else:
                 st.error("Incorrect password or email. Try again.")
                 
-############################################################################################################################
     elif st.session_state.auth_page == "Register":
         st.markdown("<h3 style='margin-bottom:0;'>Create Account</h3>", unsafe_allow_html=True)
         new_user = st.text_input("Choose a Username", key="r_user", placeholder="Brand identifier").strip()
         new_password = st.text_input("Choose a Password", type="password", key="r_password", placeholder="Create a strong password")
-        confirm_password = st.text_input("Confirm Password", type="password", key="r_conf", placeholder="Repeat password")
-                       
+        confirm_password = st.text_input("Confirm Password", type="password", key="r_conf", placeholder="Repeat password")                      
         if st.button("Back to Login", type="secondary"):
             st.session_state.auth_page = "Login"
-            st.rerun()
-        
-        
+            st.rerun()             
         if st.button("Register Account", type="primary"):
             if not new_user:
                 st.error("Username cannot be blank.")
-            elif not new_password or not confirm_password:
-                st.error("Passwords fields cannot be empty.")
-            
-            elif new_password != confirm_password:
-                st.error("Passwords do not match.")
-            elif new_user in st.session_state.user_db:
-                st.error("Username already exists.")
             else:
-                is_strong, strength_msg = check_password_strength(new_password)
-                if is_strong:
-                    st.session_state.user_db[new_user] = hash_password(new_password)
-                    save_to_local_database(st.session_state.user_db)
-                    st.success("Account registered successfully.")
-                    st.session_state.auth_page = "Login"
-                    st.rerun()            
+                is_valid, validation_msg = validate_username(new_user)
+                if not is_valid:
+                    st.error(validation_msg)
+                elif not new_password or not confirm_password:
+                    st.error("Passwords fields cannot be empty.")         
+                elif new_password != confirm_password:
+                    st.error("Passwords do not match.")
+                elif new_user in st.session_state.user_db:
+                    st.error("Username already exists.")
                 else:
-                    st.error(strength_msg)
+                    is_strong, strength_msg = check_password_strength(new_password)
+                    if is_strong:
+                        salt, hashed_pw = hash_password(new_password)
+                        st.session_state.user_db[new_user] = {"salt": salt, "hash": hashed_pw}
+                        if save_to_local_database(st.session_state.user_db):
+                            st.success("Account registered successfully.")
+                            st.session_state.auth_page = "Login"
+                            st.rerun()
+                        else:
+                            st.error("Failed to save user data. Try again.")
+                    else:
+                        st.error(strength_msg)
+                
     elif st.session_state.auth_page == "Forgot":
         st.markdown("### Reset Password")
-        st.text_input("Enter Your Registered Email")
+        reset_user = st.text_input("Enter Your Username", key="reset_user")
+        new_password = st.text_input("New Password", type="password", key="reset_new_password")
+        confirm_password = st.text_input("Confirm New Password", type="password", key="reset_confirm_password")
+        
+        if st.button("Reset Password"):
+            if reset_user not in st.session_state.user_db:
+                st.error("Username not found.")
+            elif not new_password or not confirm_password:
+                st.error("Please fill in both password fields.")
+            elif new_password != confirm_password:
+                st.error("Passwords do not match.")
+            else:
+                is_strong, msg = check_password_strength(new_password)
+                if not is_strong:
+                    st.error(msg)
+                else:
+                    salt, hashed_pw = hash_password(new_password)
+                    st.session_state.user_db[reset_user] = {"salt": salt, "hash": hashed_pw}
+                    if save_to_local_database(st.session_state.user_db):
+                        st.success("Password reset successfully. Please log in.")
+                        st.session_state.auth_page = "Login"
+                        st.rerun()
+                    else:
+                        st.error("Failed to save new password. Try again.")
         if st.button("Back to login", type="secondary"):
             st.session_state.auth_page = "Login"
             st.rerun()
-else:
-    inject_core_dashboard_styles()
-    logo_data = get_encoded_logo()
-    if logo_data:
-        st.markdown(f"""
-            <div style="position: fixed; top: 15px; left: 50px; z-index: 999999 !important; pointer-events: none !important;;">
-                <img src="data:image/png;base64,{logo_data}" width="30" height="30">
-            </div>
-        """, unsafe_allow_html=True)
-    st.sidebar.markdown("### Ad-Box Panel")
-    st.sidebar.markdown("### FREE VERSION")
-    st.sidebar.markdown(f"Welcome: **{st.session_state.current_user}**!", unsafe_allow_html=True)
-    
-#############################################################################################################3333    
-    
-    if st.sidebar.button("Reset SLiders To Sliders", use_container_width=True):
-        st.session_state.ga_brightness = 1.0
-        st.session_state.ga_contrast = 1.0
-        st.session_state.ga_blur = 0
-        st.session_state.ga_border_width = 0
-        st.rerun()
-        
+            
+                        
+def main_app_ui():
+    inject_login_styles()
+    st.sidebar.markdown(f"###Welcome: **{st.session_state.current_user}**!")
+    st.sidebar.markdown("### FinanceBox AI - Free version")
+    privacy_and_data_control_ui()
     if st.sidebar.button("Log out", type="primary"):
         st.session_state.logged_in = False
         st.session_state.current_user = None
+        clear_chat()
         st.rerun()
+    #Show user list only for admin######################################3
+    if st.session_state.current_user == "demo_user":
+        show_user_list()
+        
+    st.title("FinanceBox AI")
+    st.caption("Upload a financial image or PDF and get simplified results.")
+    #Agree checkbox bfore uploading###########33
+    agree = st.checkbox("I agree to upload and processing of my financial doc.")
+    if not agree:
+        st.warning("You must agree to proceed.")
+        st.stop()
+        
+    uploaded_files = st.file_uploader(
+        "Upload your financial documents",
+        type=["pdf", "png", "jpg", "jpeg"],
+        accept_multiple_files=True,
+        key="document_upload",
+    )
     
-    app_left_col, app_right_col = st.columns([4.5, 1.0], gap="large", vertical_alignment="top")
+    global financial_data, doc_type
+    financial_data = {}
+    doc_type = "unsupported"
     
-    with app_right_col:
-        st.markdown(
-            """
-            <style>
-            [data-testid="stColumn"]:nth-child(1) {
-                position: relative !important;
-                z-index: 100 !important;
-                background-color: #020617 !important;
-                padding-right: 20px !important;
-                box-shadow: 15px !important;
-            }
-            .direct-features-scroller {
-                max-height: 82vh !important;
-                overflow-y: auto !important;
-                overflow-x: hidden !important;
-                width: 100% !important;
-                position: relative !important;
-                
-            }
-            .direct-features-scroller::-webkit-scrollbar {
-                width: 6px !important;
-            }
-            .direct-features-scroller::-webkit-scrollbar-track {
-                background: rgba(0,0,0,0) !important;
-            }
-            .direct-features-scroller::-webkit-scrollbar-thumb {
-                border-radius: 10px !important;
-                background:  #2563EB !important;
-            }
-
-            </style>
-            <div class="direct-features-scroller">
-            """,
-            unsafe_allow_html=True
-        )
-                    
-                
-        st.markdown('<div class="workspace-right-controls">', unsafe_allow_html=True)
-        if st.session_state.get("is_admin", False):
-            tab1, tab2 = st.tabs(["Ad Editor Workspace", "Admin Profile Manager"])
-        else:
-            tab1, = st.tabs(["Ad Editor Workspace"])
-            tab2 = None
-        with tab1:
-            st.write("### Step 1: Base Media Import")
-            uploaded_file = st.file_uploader("Upload Product Asset (.png, jpg)", type=["png", "jpg", "jpg"])
-            if "adcraft_render_trigger" not in st.session_state:
-                st.session_state.adcraft_render_trigger = False
-           
-            st.write("### Design Controls")
+    if uploaded_files:
+        st.markdown("### Uploaded Documents")
+        for uploaded_file in uploaded_files:
+            if uploaded_file.size > 10 * 1024 * 1024:
+                st.error(f"{uploaded_file.name} is too large. Max size is 10MB.")
+                continue
+            file_bytes = uploaded_file.read()
             
-            ad_dimension = st.selectbox("Select Ad Platform Layout", [
-                "Original Ratio", "Instagram Widescreen (16:9)", "Instagram Square Feed (1:1)",
-                "Instagram Stories & Reels (9:16)", "Pinterest & Google Shop (2:3 Vertical)",
-                "Meta High-CTR Mobile Feed (4:5 Potrait)"
-            ], key="mf_ratio")           
-            ad_filter = st.selectbox("Select One-Click Look Enhancement", [
-                "Original (No Filter)", "Vivid Pop (High Saturation)", "Cinematic Vintage (Warm Tone)",
-                "Noir (Classic Black & White)", "Cyberpunk Neon (High Contrast / Blue Hue)",
-                "UGC Raw Exposure (Authentic Smartphone Shot)"
-            ], key="ad_filter_style")
-            product_name_val = st.text_input("Your Product Name", value="Timberlands", key="product_name_widget")
-                
-            niche = st.selectbox("Target Audience Focus", [
-                "Problem/Solution", "Impulse Buy Scarcity", "Pure Discount Deal"
-            ])
-                    
-            if niche == "Problem/Solution":
-                FREE_PRESET_HOOKS = [
-                    "Stop wasting cash on therapy! Try the {product_name}",
-                    "Your back pain ends today because of this tiny {product_name} hack...",
-                    "The viral product Amazon tried to ban: {product_name}!",
-                    "Doctors don't want you knowing about this {product_name} trick...",
-                    "If you suffer from bad posture, stop scrolling and look at this {product_name}."
-                ]
-            elif niche == "Impulse Buy Scarcity":
-                FREE_PRESET_HOOKS  = [
-                    "Almost SOLD OUT: get your {product_name} now!",
-                    "TikTok made me buy it, and honestly it's 100% worth it.",
-                    "Only 14 units left of the {product_name} worldwide!",
-                    "The price of {product_name} drops to R0 if you click before midnight...",
-                    "Don't say we didn't warn you. The viral {product_name} is selling out fast."
-                ]
-            else:
-                FREE_PRESET_HOOKS = [
-                    "50% OFF Flash Sale on the {product_name} Bundle!",
-                    "Don't scroll! Lowest price ever recorded for {product_name}.",
-                    "Buy 1 Get 1 Free on all {product_name} packages today!",
-                    "Clearance sale: Grab your {product_name} for pennies on the dollar.",
-                    "Massive price drop on {product_name}. Limited time offer!"
-                ]
-            generate_button = st.button("Apply Changes & Generate Creative")
-            if generate_button:
-                st.session_state.adcraft_render_trigger = True
-            
-            selected_hook_template = st.selectbox("Select your ad hook template", options=FREE_PRESET_HOOKS, key="ad_hook_selection_widget")
-            active_product_text = product_name_val.strip() if product_name_val else "Product"
-            final_processed_hook_text = selected_hook_template.format(product_name=active_product_text) if FREE_PRESET_HOOKS else "Explore catalog collections today."
-            st.session_state.ga_brightness = st.slider("Base Image Brightness Scale", 0.5, 2.0, 1.0)
-            st.session_state.ga_contrast = st.slider("Base Image Contrast Scale", 0.5, 2.0, 1.1)
-            st.session_state.ga_blur = st.slider("Layer Blur Filter Intensity", 0, 10, 0)
-            st.session_state.ga_border_width = st.slider("Border Thickness Percent", 0, 15, 0)                
-              
-           
-            st.write("### Step 3: Sticker Badges")
-            
-            scarcity_tag = st.checkbox("Show ' SELLING FAST - RESTOCKING SOON' Scarcity Footer Banner", value=True)
-            scarcity_text = st.text_input("Customize Footer Text", value="SELLING FAST - RESTOCKING SOON", disabled=not scarcity_tag, key="custom_scarcity_text")
-            discount_badge = st.checkbox("Stamp Promo Sticker", value=False)
-            discount_text =  st.text_input("Sticker Text", value="50% OFF TODAY", disabled=not discount_badge, key="custom_discount_text")
-            sticker_theme = st.selectbox(
-                "Sticker High-CTR Color Combo",
-                ["Urgent Flash (Neon Yellow / Black Text)", "Clearance Deal (Crimson Red / White Text)", "Minimalist Clean (Matte Black / White Text)"],
-                disabled=not discount_badge,
-                key="sticker_theme_select"
-            )
-            sticker_position = st.selectbox(
-                "Sticker Smart Position",
-                ["Top Left Corner", "Top Right Corner", "Center Canvas Focal Point"],
-                disabled=not discount_badge,
-                key="sticker_pos_select"
-            )
-            st.write("### Step 4: Native Social Previews")
-            
-            apply_tiktok_ui = st.checkbox("Overlay Transparent TikTok Native UI Layout Elements", key="tiktok_ui_toggle_widget")
-            
-            apply_ig_ui = st.checkbox("Overlay Instagram Feed UI Layout Elements", key="insta_ui_toggle_widget")
-            brand_input_value = st.text_input("Enter creator name (without @)", value=st.session_state.get("brand_handle_input_widget", "creator"))
-            st.session_state["brand_handle_input_widget"] = brand_input_value.strip()
-            st.write("DEBUG: Creator name is:", brand_input_value)
-            if apply_ig_ui:
-                st.markdown("**Brand Profile**")
-                with st.container(border=True):
-                    st.file_uploader(
-                        "Upload Brand Avatar",
-                        type=["png", "jpg", "jpeg"],
-                        key="user_profile_upload_widget"
-                    )
-            
-            ad_enable_cta = st.checkbox("Stamp High-CTR Sponsored CTA Button", key="enable_global_cta_toggle")
-            ad_cta_label = st.text_input("Button Text String", value="Shop Now", disabled=not ad_enable_cta, key="global_cta_text_field")
-            
-            if "16:9" in ad_dimension:
-                canvas_w, canvas_h = 1920, 1080
-            elif "1:1" in ad_dimension:
-                canvas_w, canvas_h = 1080, 1080
-            elif "9:16" in ad_dimension:
-                canvas_w, canvas_h = 1080, 1920
-            elif "2:3" in ad_dimension:
-                canvas_w, canvas_h = 1080, 1620
-            elif "4:5" in ad_dimension:
-                canvas_w, canvas_h = 1080, 1350
-            elif "Original Ratio" in ad_dimension and uploaded_file is not None and 'base_canvas' in locals() and base_canvas:
-                
-                canvas_w, canvas_h = base_canvas.size
-            else:
-                canvas_w, canvas_h = 1080, 1080
-        
-            if uploaded_file is None:
-                processed_layer = Image.new("RGB", (canvas_w, canvas_h), "#111827")
-                draw = ImageDraw.Draw(processed_layer)
-                try: fallback_font = ImageFont.load_default(size=20)
-                except: fallback_font = ImageFont.load_default()
-                placeholder_text = f"Drop your ad product....."
-                wrapped_placeholder = textwrap.wrap(placeholder_text, width=50 if canvas_w < canvas_h else 50)
-                text_y = canvas_h // 2 - (len(wrapped_placeholder) * 25)
-                for line in wrapped_placeholder:
-                    try: text_w = draw.textlength(line, font=fallback_font)
-                    except: text_w = len(line) * 14
-                    text_x = (canvas_w - text_w) // 2
-                    draw.text((text_x, text_y), line, fill="#FFFFFF", font=fallback_font)
-                    text_y += int(canvas_h * 0.04)
-                
-            else:
-                if 'base_canvas' in locals() and base_canvas:
-                    processed_layer = base_canvas.copy()
-                else:    
-                    raw_file_bytes = uploaded_file.getvalue()
-                    base_canvas = simple_image_cache(raw_file_bytes)
-                    if base_canvas is not None:
-                        processed_layer = base_canvas.copy()
-                    else:
-                        processed_layer = Image.new("RGB", (canvas_w, canvas_h), "#111827")
-                        
-                processed_layer = processed_layer.resize((canvas_w, canvas_h), Image.Resampling.LANCZOS)
-                st.session_state["ad-box_active_canvas"] = processed_layer
-                if st.session_state.get("ga_brightness", 1.0) != 1.0:
-                    processed_layer = ImageEnhance.Brightness(processed_layer).enhance(st.session_state.ga_brightness)        
-                if st.session_state.get("ga_contrast", 1.0) != 1.0:
-                    processed_layer = ImageEnhance.Contrast(processed_layer).enhance(st.session_state.ga_contrast)
-                
-                
-                if "Vivid Pop" in ad_filter:
-                    processed_layer = ImageEnhance.Color(processed_layer).enhance(1.6)
-                    processed_layer = ImageEnhance.Contrast(processed_layer).enhance(1.1)
-                elif "Cinematic Vintage" in ad_filter:
-                    processed_layer = ImageEnhance.Color(processed_layer).enhance(0.85)
-                    r, g, b = processed_layer.split()
-                    r = r.point(lambda i: min(255, int(i * 1.08)))
-                    b = b.point(lambda i: int(i * 0.90))
-                    processed_layer = Image.merge("RGB", (r, g, b))
-                elif "Noir" in ad_filter:
-                    processed_layer = ImageOps.grayscale(processed_layer).convert("RGB")
-                    processed_layer = ImageEnhance.Contrast(processed_layer).enhance(1.2)
-                elif "Cyberpunk Neon" in ad_filter:
-                    processed_layer = ImageEnhance.Color(processed_layer).enhance(1.6)
-                    processed_layer = ImageEnhance.Contrast(processed_layer).enhance(1.3)
-                    r, g, b = processed_layer.split()
-                    b = b.point(lambda i: min(255, int(i * 1.25)))
-                    r = r.point(lambda i: int(i * 0.95))
-                    processed_layer = Image.merge("RGB", (r, g, b))
-                elif "UGC Raw Exposure" in ad_filter:
-                    processed_layer = ImageEnhance.Contrast(processed_layer).enhance(0.92)
-                    processed_layer = ImageEnhance.Brightness(processed_layer).enhance(1.08)
-                    processed_layer = ImageEnhance.Color(processed_layer).enhance(0.95)
-              
-                if st.session_state.get("ga_blur", 0) > 0:
-                    processed_layer = processed_layer.filter(ImageFilter.GaussianBlur(st.session_state.ga_blur))
-        
-                if st.session_state.get("ga_border_width", 0) > 0:
-                    border_pixels = int(max(processed_layer.width, processed_layer.height) * (st.session_state.ga_border_width / 100))           
-                    border_fill_color = "#FFFFFF"            
-                    processed_layer = ImageOps.expand(processed_layer, border=border_pixels, fill=border_fill_color)
-                
-                processed_layer = processed_layer.resize((canvas_w, canvas_h), Image.Resampling.LANCZOS)
-            
-            draw = ImageDraw.Draw(processed_layer)
-            w, h = processed_layer.size
-            is_tall_ratio = h > w
-            is_square_ratio = abs(w - h) < (max(w, h) * 0.05)
-            btn_w = int(w * 0.88)
-            btn_h = max(36, int(h * 0.052))
-            btn_x1 = int((w - btn_w) / 2)
-            is_social_ui_active = apply_ig_ui or apply_tiktok_ui
-            if scarcity_tag:
-                banner_height = int(h * 0.08) if h > 0 else 120
-                if is_social_ui_active:
-                    btn_y1 = h - banner_height - btn_h - 50
-                else:
-                    btn_y1 = h - banner_height - btn_h - 12
-                #active_footer_ceiling = btn_y1
-            else:
-                banner_height = 0
-                if is_social_ui_active:
-                    btn_y1 = h - btn_h - 60
-                else:
-                    btn_y1 = h - btn_h - 60
-            
-            if ad_enable_cta:
-                active_footer_ceiling = btn_y1
-            else:
-                if scarcity_tag:
-                    active_footer_ceiling = h - banner_height - 25
-                else:
-                    active_footer_ceiling = h - 40 
-                        
-                
-            try:
-                font_headline = ImageFont.truetype("Arial.ttf", 36)
-                font_badge = ImageFont.truetype("Arial.ttf", 24)
-            except:
-                font_headline = ImageFont.load_default()
-                font_badge = ImageFont.load_default()
-                
-            if st.session_state.get("ga_headline", ""):
-                wrapped_lines = textwrap.wrap(st.session_state.ga_headline, width=40)
-                line_height = 40
-                banner_height = 40 + (len(wrapped_lines) * line_height)
-      
-                overlay_layer = Image.new('RGBA', processed_layer.size, (0,0,0,0))
-                overlay_draw = ImageDraw.Draw(overlay_layer)
-                overlay_draw.rectangle([(0, 0), (canvas_w, banner_height)], fill=(0, 0, 0, 180))
-                processed_layer = Image.alpha_composite(processed_layer.convert("RGBA"), overlay_layer).convert("RGB")
-                 
-                draw = ImageDraw.Draw(processed_layer)
-                current_y = 30
-                for line in wrapped_lines:
-                    draw.text((30, current_y), line, fill="#FFFFFF", font=font_headline)
-                    current_y += line_height
-                
-                
-                    
-            if apply_ig_ui:
-                draw = ImageDraw.Draw(processed_layer)
-                w, h = processed_layer.size
-                
-                profile_radius = max(16, int(w * 0.035))
-                profile_x = int(w * 0.018)
-                profile_y = int(h * 0.02)
-                avatar_diameter = profile_radius * 2
-                
-                draw.ellipse([profile_x, profile_y, profile_x + avatar_diameter, profile_y + avatar_diameter], fill=(30, 41, 59))
-                
-                creator_handle_font_size = max(14, int(w * 0.037))
-                try: creator_handle_font = ImageFont.truetype("arialbd.ttf", creator_handle_font_size)
-                except:
-                    try: creator_handle_font = ImageFont.truetype("arial.ttf", creator_handle_font_size)
-                    except: creator_handle_font = ImageFont.load_default()
-                    
-                    
-                brand_input_value = st.session_state.get("brand_handle_input_widget", "").strip()
-                if not brand_input_value:
-                    brand_input_value = "creator"
-                display_handle = f"@{brand_input_value}"
-                   
-                profile_file = st.session_state.get("user_profile_upload_widget", None)
-                if profile_file is not None:
+            with st.container():
+                st.markdown(f"### {uploaded_file.name}")
+                if uploaded_file.type.startswith("image/"):
                     try:
-                        avatar_bytes = profile_file.getvalue()
-                        raw_avatar = Image.open(io.BytesIO(avatar_bytes)).convert("RGBA")
-                        min_edge = min(raw_avatar.size)
-                        left_crop = (raw_avatar.width - min_edge) // 2
-                        top_crop = (raw_avatar.height - min_edge) // 2
-                        raw_avatar = raw_avatar.crop((left_crop, top_crop, left_crop + min_edge, top_crop + min_edge))
-                        raw_avatar = raw_avatar.resize((avatar_diameter, avatar_diameter), Image.Resampling.LANCZOS)
+                        image = Image.open(BytesIO(file_bytes)).convert("RGB")
+                        st.image(image, caption=uploaded_file.name, width=300)
+                    except Exception as e:
+                        st.error(f"Could not display image: {e}")
                         
-                        mask_layer = Image.new("L", (avatar_diameter, avatar_diameter), 0)
-                        mask_draw =ImageDraw.Draw(mask_layer)
-                        mask_draw.ellipse([0, 0, avatar_diameter, avatar_diameter], fill=255)
-                        raw_avatar.putalpha(mask_layer)
-                        processed_layer.paste(raw_avatar, (profile_x, profile_y), mask=raw_avatar)
-                        draw = ImageDraw.Draw(processed_layer)
-                    except:
-                        profile_file = None
-                        
-                if profile_file is None:
-                    avatar_letter = display_handle[1].upper() if len(display_handle) > 1 else "C"
-                    try: avatar_font = ImageFont.truetype("arialbd.ttf", int(profile_radius * 1.1))
-                    except: avatar_font = creator_handle_font
-                    
-                    av_text_x = profile_x + int(profile_radius * 0.65)
-                    av_text_y = profile_y + int(profile_radius * 0.35)
-                    draw.text((av_text_x + 1, av_text_y + 1), avatar_letter, fill=(0, 0, 0), font=avatar_font)
-                    
-                    draw.text((av_text_x, av_text_y), avatar_letter, fill=(255, 255, 255), font=avatar_font)
                 
-                metric_font_size = max(12, int(w * 0.026))
-                try: metric_font = ImageFont.truetype("arial.ttf", metric_font_size)
-                except: metric_font = ImageFont.load_default()
-                
-                caption_font_size = max(14, int(w * 0.028))
-                try: caption_font = ImageFont.truetype("arialbd.ttf", caption_font_size)
-                except:
-                    try: caption_font = ImageFont.truetype("arial.ttf", caption_font_size)
-                    except: caption_font = creator_handle_font
-                    
-                text_margin_x = int(w * 0.04) 
-                is_landscape = w > h 
-                custom_hook = final_processed_hook_text
-                usable_pixel_width = int(w * 0.80)
-                estimated_char_pixel_width = int(caption_font_size * 0.55)
-                max_line_width = int(usable_pixel_width / estimated_char_pixel_width)
-                max_line_width = max(25, max_line_width)
-                
-                wrapped_caption_lines = textwrap.wrap(final_processed_hook_text, width=max_line_width)
-                total_caption_lines_count = len(wrapped_caption_lines)
-                caption_line_height = int(caption_font_size * 1.5)
-                caption_block_height = total_caption_lines_count * caption_line_height
-                likes_row_height = 45 + int(metric_font_size * 1.25)
-                current_caption_y = active_footer_ceiling - caption_block_height - likes_row_height - 45
-                draw.text((text_margin_x, current_caption_y), f"{display_handle} ", fill="#FFFFFF", font=caption_font)
-                
-                verified_icon = get_cached_social_icon("verified_icon.png", int(caption_font_size * 1.3))
-                if verified_icon:
-                    bbox = draw.textbbox((0, 0), f"{display_handle} ", font=caption_font)
-                    username_width = bbox[2] - bbox[0] 
-                    badge_x = text_margin_x + username_width
-                    badge_y = current_caption_y + (caption_font_size - verified_icon.height) // 2
-                    processed_layer.paste(verified_icon, (badge_x, badge_y), mask=verified_icon)
-                
-                current_caption_y += caption_line_height
-                for line_item in wrapped_caption_lines:  
-                    draw.text((text_margin_x, current_caption_y), line_item, fill="#E5E7EB", font=caption_font)
-                    current_caption_y += caption_line_height
-                
-                current_caption_y += 70
-                try: likes_font = ImageFont.truetype("arial.ttf", metric_font_size)
-                except: likes_font = creator_handle_font
-                draw.text((text_margin_x, current_caption_y), "1,506 likes", fill="#0095F6", font=likes_font)      
-                icon_size = max(14, int(w * 0.040))
-                icon_y = active_footer_ceiling - 50 if (ad_enable_cta or apply_ig_ui) else h - 50
-                target_icon_y = active_footer_ceiling - 70
-                lx = int(w * 0.05)
-                cx = lx + icon_size + int(w * 0.04)                                                 
-                sx = cx + icon_size + int(w * 0.04)
-                bx = w - int(w * 0.05) - icon_size
-                    
-                icon_mapping = [
-                    ("ig_like (3) - Copy.png", lx),
-                    ("ig_comment (2) - Copy.png", cx), 
-                    ("ig_share - Copy.png", sx), 
-                    ("ig_bookmark - Copy.png", bx),
-                ]
-                for filename, x_pos in icon_mapping:
-                            
-                    icon_img = get_cached_social_icon(filename, icon_size)
-                    if icon_img:
-          
-                        processed_layer.paste(icon_img, (x_pos, target_icon_y), mask=icon_img)
-                    else:
-                        draw.ellipse([x_pos, target_icon_y, x_pos + icon_size, target_icon_y + icon_size], fill=(255, 255, 255))
-               
-                draw = ImageDraw.Draw(processed_layer)
-            
-            if ad_enable_cta:
-                btn_y1 = active_footer_ceiling + 8
-                btn_x2 = btn_x1 + btn_w
-                btn_y2 = btn_y1 + btn_h
-                cylinder_radius = btn_h // 2
-                draw.rounded_rectangle([btn_x1, btn_y1, btn_x2, btn_y2], fill="#1E73EB", radius=cylinder_radius)
-                cta_font_size = max(72, int(btn_h * 1.0))
-                try:
-                    cta_font = ImageFont.truetype("C:/Users/albertina/Desktop/mystudio/ARIAL.TTF", cta_font_size)
-                    print("Font loaded successfully")
-                except Exception as e:
-                    cta_font = ImageFont.load_default()
-                    print("Font loading failed:", e)
-                    cta_font = ImageFont.load_default()
-                cta_text_label = st.session_state.get("global_cta_text_field", "Shop Now")
-                
-                try:
-                    bbox = draw.textbbox((0, 0), cta_text_label, font=cta_font)
-                    cta_w = bbox[2] - bbox[0]
-                    cta_h = bbox[3] - bbox[1]
-                except:
-                    cta_w = len(cta_text_label) * int(cta_font_size * 1.0)
-                    cta_h = cta_font_size
-                    
-                cta_inside_x = btn_x1 + (btn_w - cta_w) // 2
-                cta_inside_y = btn_y1 + (btn_h - cta_h) / 2 - 2
-                
-                draw.text((cta_inside_x + 1, cta_inside_y + 1), cta_text_label, fill=(0, 0, 0), font=cta_font)
-                draw.text((cta_inside_x, cta_inside_y), cta_text_label, fill="#FFFFFF", font=cta_font)       
-            if scarcity_tag:
-                w, h = processed_layer.size
-                banner_height = int(h * 0.08) if h > 0 else 120
-                draw = ImageDraw.Draw(processed_layer)
-                draw.rectangle([(0, h - banner_height), (w, h)], fill="#DC2626")
-                font_size_badge = max(20, int(banner_height * 0.42)) if h > w else max(20, int(w * 0.035))
-                try: font_badge = ImageFont.truetype("arialbd.ttf", font_size_badge)
-                except: font_badge = ImageFont.load_default()
-                      
-                try:
-                    badge_text_width = draw.textlength(scarcity_text, font=font_badge)
-                    badge_text_height = font_size_badge
-                except:
-                    badge_text_width = len(scarcity_text) * int(font_size_badge * 0.55)
-                    badge_text_height = font_size_badge
-                banner_center_x = int((w - badge_text_width) / 2)
-                banner_center_y = int(h - (banner_height / 2) - (badge_text_height / 2))
-                draw.text((banner_center_x + 1, banner_center_y + 1), scarcity_text, fill=(0, 0, 0), font=font_badge)
-                draw.text((banner_center_x, banner_center_y), scarcity_text, fill="#FFFFFF", font=font_badge)
-            
-            if apply_ig_ui:
-                f_size = profile_font_size if 'profile_font_size' in locals() else max(14, int(w * 0.03))   
-                sponsor_font_size = max(11, int(f_size * 0.8))
-                try: sponsor_font = ImageFont.truetype("arial.ttf", sponsor_font_size)
-                except: sponsor_font = ImageFont.load_default()
-                profile_radius_calc = max(16, int(w * 0.035))
-                profile_avatar_diameter = profile_radius_calc * 2
-                       
-                sponsor_text_x = int(w * 0.01) + profile_avatar_diameter + int(w * 0.02)
-                sponsor_text_y = int(h * 0.0) + int((profile_avatar_diameter - creator_handle_font_size) / 2) + creator_handle_font_size - 4
-                
-                draw.text((sponsor_text_x + 1, sponsor_text_y + 1), "Sponsored", fill=(0, 0, 0), font=sponsor_font)
-                draw.text((sponsor_text_x + 2, sponsor_text_y + 2), "Sponsored", fill=(0, 0, 0), font=sponsor_font)
-                draw.text((sponsor_text_x, sponsor_text_y), "Sponsored", fill=(178, 178, 178), font=sponsor_font)
-            else:
-                ad_box_w = max(38, int(w * 0.065))
-                ad_box_h = max(18, int(h * 0.038))
-           
-                ad_corner_x1 = int(w * 0.04)
-                ad_corner_y1 = int(h * 0.04)
-                badge_overlay = Image.new("RGBA", processed_layer.size, (0, 0, 0, 0))
-                badge_draw = ImageDraw.Draw(badge_overlay)
-                badge_draw.rounded_rectangle([ad_corner_x1, ad_corner_y1, ad_corner_x1 + ad_box_w, ad_corner_y1 + ad_box_h], fill=(15, 23, 42, 90), radius=4)
-                ad_label_font_size = max(11, int(w * 0.024))
-                try: ad_label_font = ImageFont.truetype("arialbd.ttf", ad_label_font_size)
-                except: ad_label_font = ImageFont.load_default() 
-             
-                try: ad_text_w = draw.textlength("Ad", font=ad_label_font)
-                except: ad_text_w = len("Ad") *  (ad_label_font_size * 0.5)
-                ad_txt_x = ad_corner_x1 + int((ad_box_w - ad_text_w) / 2)
-                ad_txt_y = ad_corner_y1 + int((ad_box_h - ad_label_font_size) / 2) - 1
-                badge_draw.text((ad_txt_x, ad_txt_y), "Ad", fill=(255, 255, 255, 255), font=ad_label_font) 
-                processed_layer.paste(badge_overlay, (0, 0), mask=badge_overlay)
-                draw = ImageDraw.Draw(processed_layer)
-                                
-            if discount_badge:
-                badge_draw = ImageDraw.Draw(processed_layer)
-                w, h = processed_layer.size
-                circle_radius = int((w + h) * 0.055) if w > 0 else 80
-                circle_diameter = circle_radius * 2
-                font_size_sticker = max(22, int(circle_radius * 0.38))
-                try: font_sticker = ImageFont.truetype("arialbd.ttf", font_size_sticker)
-                except:
-                    try: font_sticker = ImageFont.truetype("arial.ttf", font_size_sticker)
-                    except: font_sticker = badge_draw.load_default()
-                if "Urgent Flash" in sticker_theme:
-                    bg_color, txt_color = "#F59E0B", "#060B13"
-                elif "Clearance Deal" in sticker_theme:
-                    bg_color, txt_color = "#DC2626", "#FFFFFF"
+                if uploaded_file.type == "application/pdf":
+                    with st.spinner(f"Extracting text from PDF: {uploaded_file.name}"):
+                        text = extract_text_from_pdf(file_bytes)
+                elif uploaded_file.type.startswith("image/"):
+                    with st.spinner(f"Extracting text from image: {uploaded_file.name}"):
+                        text = extract_text_from_image(file_bytes)
                 else:
-                    bg_color, txt_color = "#0F172A", "#FFFFFF"
-                if sticker_position == "Top Left Corner":
-                    if apply_ig_ui or apply_tiktok_ui:
-                        center_x = int(w * 0.03) + circle_radius 
-                        center_y = int(h * 0.10) + circle_radius
-                    else:
-                        center_x = int(w * 0.01) + circle_radius 
-                        center_y = int(h * 0.08) + circle_radius 
-                elif sticker_position == "Top Right Corner":
-                    if apply_ig_ui or apply_tiktok_ui:
-                        center_x = w - circle_radius - int(w * 0.03)
-                        center_y = int(h * 0.10) + circle_radius
-                    else:
-                        center_x = w - circle_radius - int(w * 0.01)
-                        center_y = int(h * 0.08) + circle_radius
-                else:
-                    center_x = int(w / 2)
-                    center_y = int(h / 2)
-                cx1 = center_x - circle_radius
-                cy1 = center_y - circle_radius
-                cx2 = center_x + circle_radius
-                cy2 = center_y + circle_radius
-                badge_draw.ellipse([cx1, cy1, cx2, cy2], fill=bg_color)
-                words_list = discount_text.split()
-                if len(words_list) >= 3:
-                    
-                    lines_to_draw = [
-                        " ".join(words_list[:2]),
-                        " ".join(words_list[2:])
-                    ]
-                elif len(words_list) == 2:
-                    lines_to_draw = [words_list[0], words_list[1]]
-                else:
-                    lines_to_draw = [discount_text]
-                line_height_padding = int(font_size_sticker * 1.15)
-                total_block_height = len(lines_to_draw) * line_height_padding
-                start_render_y = center_y - (total_block_height // 2) + int(font_size_sticker * 0.1)
-                for index_step, single_line in enumerate(lines_to_draw):
-                    try: line_w = badge_draw.textlength(single_line, font=font_sticker)
-                    except: line_w = len(single_line) * int(font_size_sticker * 0.55)
-                    text_inside_x = center_x - int(line_w / 2)
-                    text_inside_y = start_render_y + (index_step * line_height_padding)
-                    badge_draw.text((text_inside_x, text_inside_y), single_line, fill=txt_color, font=font_sticker)
-            if apply_tiktok_ui:
-                tiktok_draw = ImageDraw.Draw(processed_layer)
-                w, h = processed_layer.size
-                scale_factor = (w + h) / 2
-                ui_font_size = int(scale_factor * 0.027) if scale_factor > 0 else 27
-                ui_font_size = max(ui_font_size, 16)
-                icon_font_size = int(scale_factor * 0.029) if scale_factor > 0 else 29
-                
-                try:
-                    ui_font = ImageFont.truetype("arial.ttf", ui_font_size)
-                    ui_font_bold = ImageFont.truetype("arial.ttf", ui_font_size)
-                except: 
-                    ui_font = ImageFont.load_default() 
-                    ui_font_bold = ImageFont.load_default()
-                     
-                is_square = abs(w - h) < (max(w, h) * 0.05)
-                base_start_y = int(h * 0.35 if is_square else h * 0.42)
-                icon_spacing = int(h * 0.11 if is_square else h * 0.13)
-                disc_height_scale = 1.0
-                icon_center_x = int(w * 0.94)
-                
-                heart_count = st.session_state.get("custom_heart", "50.2M")
-                comment_count = st.session_state.get("custom_comment", "92.1k")
-                save_count = st.session_state.get("custom_save", "10k")
-                share_count = st.session_state.get("custom_share", "78.4k")
-                tiktok_sidebar = [
-                    ("icon_heart (2).png", heart_count),
-                    ("icon_comment.png", comment_count),
-                    ("icon_save-instagram.png", save_count),
-                    ("icon_share (2).png", share_count)
-                ]
-                pfp_radius = int(w * 0.035)
-                pfp_y = base_start_y - int(h * 0.10 if is_square else h * 0.12)
-                profile_file = st.file_uploader("Upload Brand avatar", type=["png", "jpg", "jpeg"], key="tiktok_avatar_upload")
-                if profile_file is not None:
-                    try:
-                        avatar_bytes = profile_file.getvalue()
-                        raw_avatar = Image.open(io.BytesIO(avatar_bytes)).convert("RGBA")
-                        min_edge = min(raw_avatar.size)
-                        left_crop = (raw_avatar.width - min_edge) // 2
-                        top_crop = (raw_avatar.height - min_edge) // 2
-                        raw_avatar = raw_avatar.crop((left_crop, top_crop, left_crop + min_edge, top_crop + min_edge))
-                        raw_avatar = raw_avatar.resize((pfp_radius * 2, pfp_radius * 2), Image.Resampling.LANCZOS)
-                        
-                        mask_layer = Image.new("L", (pfp_radius * 2, pfp_radius * 2), 0)
-                        mask_draw =ImageDraw.Draw(mask_layer)
-                        mask_draw.ellipse([0, 0, pfp_radius * 2, pfp_radius * 2], fill=255)
-                        raw_avatar.putalpha(mask_layer)
-                        processed_layer.paste(raw_avatar, (icon_center_x - pfp_radius, pfp_y - pfp_radius), mask=raw_avatar)
-                    except:
-                        
-                        tiktok_draw.ellipse([(icon_center_x - pfp_radius, pfp_y - pfp_radius), (icon_center_x + pfp_radius, pfp_y + pfp_radius)], fill="#64748B", outline="#FFFFFF", width=2)
-                else:
-                    
-                    tiktok_draw.ellipse([(icon_center_x - pfp_radius, pfp_y - pfp_radius), (icon_center_x + pfp_radius, pfp_y + pfp_radius)], fill="#64748B", outline="#FFFFFF", width=2)
-                for i, (img_name, count_label) in enumerate(tiktok_sidebar):
-                    current_icon_y = base_start_y + (i * icon_spacing)
-                    disc_radius = int(w * 0.045)
-                    
-                    icon_target_size = int(disc_radius * 1.1)
-                    icon_img = get_cached_social_icon(img_name, icon_target_size)
-                    if icon_img:
-                        if i == 0:
-                            r, g, b, a = icon_img.split()
-                            icon_img = Image.merge("RGBA", (a.point(lambda p: 254), a.point(lambda p: 44), a.point(lambda p: 85), a))                          
-                        processed_layer.paste(icon_img, (icon_center_x - (icon_target_size // 2), current_icon_y - (icon_target_size // 2)), mask=icon_img)
-                     
-                    try: lbl_w = tiktok_draw.textlength(count_label, font=ui_font)
-                    except: lbl_w = len(count_label) * (ui_font_size * 0.55)
-                    lbl_x = icon_center_x - int(lbl_w / 2)
-                    lbl_y = current_icon_y + icon_target_size // 2 + 4                                 
-                    tiktok_draw.text((lbl_x, lbl_y), count_label, fill="#FFFFFF", font=ui_font)
-                handle_input = st.text_input("Enter Tiktok Handle", value=st.session_state.get("current_user", "demo_user"))
-                active_handle = f"@{handle_input.lstrip('@')}"
-                text_margin_x = int(w * 0.04)
-                is_landscape = w > h
-                raw_caption_string = final_processed_hook_text
-                if is_landscape:
-                    max_line_width = max(22, int(w * 0.05))
-                else:
-                    max_line_width = max(22, int(w * 0.032))
-                
-                wrapped_caption_lines = textwrap.wrap(raw_caption_string, width=max_line_width)
-                total_caption_lines_count = len(wrapped_caption_lines)
-                lower_base_y = active_footer_ceiling - int(ui_font_size * (total_caption_lines_count + 1.8)) - 40
-               
-                tiktok_draw.text((text_margin_x, lower_base_y), active_handle, fill="#FFFFFF", font=ImageFont.truetype("arial.ttf", int(ui_font_size * 1.3)))
-                verified_icon_size = int(ui_font_size * 1.6)
-                verified_icon = get_cached_social_icon("verified_icon (2).png", verified_icon_size)
-                if verified_icon:
-                    bbox = tiktok_draw.textbbox((0, 0), active_handle, font=ImageFont.truetype("arial.ttf", int(ui_font_size * 1.3)))
-                    username_width = bbox[2] - bbox[0] 
-                    badge_x = text_margin_x + username_width + 5
-                    badge_y = lower_base_y + (ui_font_size - verified_icon.height) // 2
-                    processed_layer.paste(verified_icon, (badge_x, badge_y), mask=verified_icon)
-                
-                current_caption_y = lower_base_y + int(ui_font_size * 1.70)
-                for line_item in wrapped_caption_lines:
-                    
-                    tiktok_draw.text((text_margin_x, current_caption_y), line_item, fill="#FFFFFF", font=ImageFont.truetype("arial.ttf", int(ui_font_size * 1.2)))
-                    current_caption_y += int(ui_font_size * 1.20)
-                if niche == "Problem/Solution":
-                    dynamic_audio = " Original sound - Ecom Growth Hacks"
-                elif niche == "Impulse Buy Scarcity":
-                    dynamic_audio = " Trending Sound - Viral Product Audio (Locked)"
-                else:
-                    dynamic_audio = " Special Promo - Store Clearance Track"
-               
-                music_y = current_caption_y + int(ui_font_size * 0.7)
-                icon_x = text_margin_x
-                icon_size = int(ui_font_size * 1.2)
-                try:
-                    audio_icon = Image.open("icon_music.png").convert("RGBA")
-                    audio_icon = audio_icon.resize((icon_size, icon_size), Image.Resampling.LANCZOS)
-                    processed_layer.paste(audio_icon, (icon_x, music_y - icon_size // 4), mask=audio_icon)
-                    text_x = icon_x + icon_size + 20
-                except Exception:
-                    
-                    text_x = text_margin_x
-                tiktok_draw.text((text_x, music_y), dynamic_audio, fill=(255, 255, 255, 191), font=ui_font)
-            
-        if tab2:
-            with tab2:
-                st.markdown("### Registered System Accounts")
-                st.write("Manage active users authorized to use this workstation instance.")
-                for register_name in list(st.session_state.user_db.keys()):
-                    col_usr, col_act = st.columns([3, 1])
-                    with col_usr:
-                        st.code(f"User: {register_name}")
-                    with col_act:
-                        if register_name == "demo_user":
-                            st.write("System Lock")
-                        else:
-                            if st.button("Delete Account", key=f"del_{register_name}", type="secondary"):
-                                del st.session_state.user_db[register_name]
-                                save_to_local_database(st.session_state.user_db)
-                                st.success(f"Remove Account: {register_name}")
-                                st.rerun()
-        st.markdown('</div>', unsafe_allow_html=True)
-        
-        with app_left_col:
-            st.markdown(
-                """
-                <style>
-                div[data-testid="stHorizontalBlock"] button[data-testid="stBaseButton-primary"] {
-                    background: linear-gradient(135deg, #1E40AF, #2563EB) !important;
-                    color: #FFFFFF !important;
-                    border: none !important;
-                    border-radius: 10px !important;
-                    box-shadow: 0px 4px 10px rgba(37, 99, 235, 0.2) !important;
-                    font-weight: 600 !important;
-                    max-width: 220px !important;
-                }
-                div[data-testid="stHorizontalBlock"] button[data-testid="stBaseButton-primary"]:hover {
-                    background: linear-gradient(135deg, #2563EB, #3B82F6) !important;
-                    box-shadow: 0px 4px 15px rgba(37, 99, 235, 0.4) !important;
-                    color: blue !important;
-                }
-                    
-                </style>
-            """, unsafe_allow_html=True)
-            st.markdown("---")
-            st.markdown("### LIVE AD PREVIEW")
-            if "processed_layer" in locals() and processed_layer is not None:
-                st.image(processed_layer, width="stretch", output_format="PNG")
-            elif "adcraft_active_canvas" in st.session_state and st.session_state["ad-box_active_canvas"] is not None:
-                st.image(st.session_state["ad-box_active_canvas"], width="stretch", output_format="PNG")         
-            else:
-                st.info("Upload your product to generate your ad canvas preview.")
-            st.markdown("### EXPORT MEDIA")
-            st.markdown('<div class="export-box-row">', unsafe_allow_html=True)
-            
-            sub_col_left, sub_col_right = st.columns([0.9, 1.1], gap="small")
-            with sub_col_left:
-                export_format_selection = st.selectbox(
-                    "Format Output presets",
-                    ["PNG (High-Res)", "JPEG (Compressed)"],
-                    label_visibility="collapsed",
-                    key="export_format_selector_widget"
-                )
-            with sub_col_right:               
-                export_buffer = io.BytesIO()
-                if uploaded_file is not None:
-                    if "PNG" in export_format_selection:
-                        processed_layer.save(export_buffer, format="PNG")
-                        mime_string_type = "image/png"
-                        file_extension_tag = "png"
-                    else:        
-                        processed_layer.convert("RGB").save(export_buffer, format="JPEG", quality=95)
-                        mime_string_type = "image/jpeg"
-                        file_extension_tag = "jpg"
-                else:
-                    mime_string_type = "image/png"
-                    file_extension_tag = "png"
-                st.download_button(
-                    label=f"Save .{file_extension_tag.upper()} Asset",
-                    data=export_buffer.getvalue(),
-                    file_name=f"adcraft_output.{file_extension_tag}",
-                    mime=mime_string_type,
-                    type="primary"
+                    text = ""                  
+                if text.startswith("OCR_ERROR") or text.startswith("PDF_ERROR"):
+                    st.error(text)
+                    continue
+                if not text.strip():
+                    st.warning("No readable text was found in this file.")
+                    continue
                           
-                )
-           
-                    
+                doc_type = detect_document_type(text)
+                st.markdown(f"**Detected Document Type:** {doc_type.replace('_', ' ').title()}")
+                
+                if doc_type == "unsupported":
+                    st.warning("Unsupported document type. Please upload only Balance Sheets or Income Statements.")
+                    continue
+                elif doc_type == "ambiguous_financial_doc":
+                    st.warning("The document appears to contain mixed or ambiguous financial data. Please verify the document type.")
+                    continue
+                
+                if doc_type == "balance_sheet":
+                    financial_data = parse_balance_sheet(text)
+                    st.markdown("### Balance Sheet Data")
+                    if financial_data:
+                        for key, value in financial_data.items():
+                            st.metric(key.title(), f"${value:,.2f}")
+                    else:
+                        st.info("No Key Balance Sheet data found.")
                  
+                elif doc_type == "income_statement":
+                    financial_data = parse_income_statement(text)
+                    st.markdown("### Income Statement Data")
+                    if financial_data:
+                        for key, value in financial_data.items():
+                            st.metric(key.title().replace("_", " "), f"${value:,.2f}")
+                    else:
+                        st.info("No Key Income Statement data found.")
+               
+                st.markdown("---")
+    else:
+        st.info("Upload your financial document to begin analysis.")
         
-        
-        
-        
-        
-        
-        
-        
-        
-        
-        
-        
-        
-        
-        
-        
-        
-        
-        
+    st.markdown("---")   
+    chatbot_ui()
+              
+#__________________________________________________________________________________________________________________________             
+def main():
+    """
+    main entry point of the app. Shows login page if not logged in else main app ui
+    """   
+    if not st.session_state.logged_in:
+        login_ui()
+    else:
+        main_app_ui()
+if __name__ == "__main__":
+    main()
          
-         
-         
-         
-        
-    
-    
-    
-
-            
-
-        
-        
+ 
