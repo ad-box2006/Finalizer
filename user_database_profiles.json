@@ -19,5 +19,21 @@
     "ready": {
         "salt": "3468a6675869b3da5d9df806af50d08b",
         "hash": "f4d689cab473b3255adbd2f1d57a9bbbe5f1150959a706f4b606800f62b9087b"
+    },
+    "yellow": {
+        "salt": "JDJiJDEyJFdERy4ydnYyVENHZldrb1BWSWFjamU=",
+        "hash": "JDJiJDEyJFdERy4ydnYyVENHZldrb1BWSWFjamVPbkJOeUlZMnguS3RzbGxZSnhNbmJGLkJUcUl5RDZ5"
+    },
+    "phile": {
+        "hash": "JDJiJDEyJHhaNkZTVFc4US56UDhDREo1MDlncWVLTTE1ZEMxS0NobXgyWVVjV2hBRWMxaS5zNGVoREZT"
+    },
+    "Wizard": {
+        "hash": "JDJiJDEyJDRiLnQubC5mUjJaUGRqWW82SEhDRWVJV2dmUlpBVXE3MWpvRWNwYjJvdHN0cEo2dGZlTHUu"
+    },
+    "wizard": {
+        "hash": "JDJiJDEyJGFaY3QyYTFCTGljRmRueXpZYk0xUmVaaWY0Q0lBaW9NVi9HOWhma0QzWFlRSy9FYjd4QzYu"
+    },
+    "melter": {
+        "hash": "JDJiJDEyJHBSNXI1Ny5ZdTlITWd6TzY5MkhBTXVlL3UzT0hQelRaTkxsYWNLUWhpZWNMTXVVLm5XT1JX"
     }
 }
