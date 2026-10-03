@@ -1,13 +1,10 @@
 import streamlit as st
-from transformers import pipeline
 from io import BytesIO
 import pandas as pd
 import numpy as np
 import hashlib
 import difflib
 import logging
-import torch
-import nltk
 import json
 import os
 import re
@@ -31,10 +28,50 @@ def inject_login_styles():
             border: none !important;
             box-shadow: none !important;
         }
+        [data-testid="stSidebar"] div.stButton > button {
+            background-color: black !important;
+            color: blue !important;
+            border: 1px solid #475569 !important;
+            border-radius: 8px !important;
+            font-weight: 500 !important;
+            width: 100% !important;
+        }
+        [data-testid="stSidebar"] div.stButton > button:hover {
+            background-color: blue !important;
+            color: blue !important;
+            border-color: #3B82F6 !important;
+        }
+       
+        [data-testid="stFileUploader"] section {
+            background-color: #0F172A !important;
+            border: 2px dashed #3B82F6 !important;
+            border-radius: 10px !important;
+        }
         
-        .stMain h1, stMain h2, stMain h3, stMain p, stMain label {
+        [data-testid="stFileUploader"] section button {
+            background-color: #2563EB !important;
             color: white !important;
+            border: none !important;
+            border-radius: 6px !important;
+        }
+        [data-testid="stFileUploader"] section button p,
+        [data-testid="stFileUploader"] section span {
+            color: white !important;
+            -webkit-text-fill-color: white !important;
+        }
+        [data-testid="stSidebar"] h1, [data-testid="stSidebar"] h2, [data-testid="stSidebar"] h3,
+        [data-testid="stSidebar"] p, [data-testid="stSidebar"] label, [data-testid="stSidebar"] span {
+            color: black !important;
             font-family: 'Inter', sans-serif !important;
+        }
+        div.stDownloadButton > button {
+            background-color: #2563eb !important;
+            color: white !important;
+            border: none !important;
+        }
+        div.stDownloadButton > button:hover {
+            background-color: #1d4ed8 !important;
+            color: white !important;
         }
         h1, [data-testid="stMarkdownContainer"] h1 {
             background: linear-gradient(to right, #3B82F6, #8B5CF6) !important;
@@ -73,6 +110,7 @@ def inject_login_styles():
             color: white !important;
             border-color: #475569 !important;
         }
+        
         div[data-baseweb="input"],
         div[data-baseweb="base-input"] {
             background-color: #0F172A !important;
@@ -116,22 +154,11 @@ def inject_login_styles():
                 font-size: 1.1rem !important;
                 width: 100% !important;
             }
-            .chat-input-container {
-                display: flex !important;
-                flex-direction: column !important;
-                gap: 10px !important;
-            }
-            img {
-                max-width: 100% !important;
-                height: auto !important;
-            }
+           
         }
         </style>
     """, unsafe_allow_html=True)
-try:
-    nltk.data.find('tokenizers/punkt')
-except LookupError:   
-    nltk.download('punkt')
+
 db_lock = threading.Lock()#handle multiple users improves prevents data corruption 
 DB_FILE = "user_database_profiles.json"
 #####password utilities###############################################333333
@@ -190,7 +217,7 @@ def save_to_local_database(db_dict):
             with open(DB_FILE, "w") as f:
                 json.dump(db_dict, f, indent=4)
         return True
-    except Exception:
+    except Exception as e:
         logging.error(f"Failed to save user database: {e}")
         return False
     
@@ -208,7 +235,7 @@ def load_local_database():
         
 #seesion state initialization##########3
 
-st.set_page_config(page_title="FinanceBox AI", layout="centered")
+st.set_page_config(page_title="Finalyzer", layout="centered")
 if "logged_in" not in st.session_state:
     st.session_state.logged_in = False
 if "reset_trigger" not in st.session_state:
@@ -273,7 +300,7 @@ def detect_document_type_from_df(df):
 
     if any(k in text_blob for k in ["balance sheet", "assets", "liabilities", "equity"]):
         return "balance_sheet"
-    elif any(k in text_blob for k in ["income statement", "profit", "revenue", "expenses", "sales", turnover]):
+    elif any(k in text_blob for k in ["income statement", "profit", "revenue", "expenses", "sales", "turnover"]):
         return "income_statement"
     else:
         return "unsupported"    
@@ -349,23 +376,21 @@ def generate_summary(data, doc_type):
     
     if doc_type == "balance_sheet":
         return (
-            f"This balance sheet shows total assets of {fmt(data.get('assets', 0))}, "
-            f"total liabilities of {fmt(data.get('liabilities', 0))}, and equity of {fmt(data.get('equity', 0))}."
+            f"This balance sheet shows total assets of"
+            f" {fmt(data.get('assets', 0))}, total liabilities of"
+            f" {fmt(data.get('liabilities', 0))}, and equity of"
+            f" {fmt(data.get('equity', 0))}."
         )
     elif doc_type == "income_statement":
         return (
-            f"This income statement reports revenue of {fmt(data.get('revenue', 0))}, "
-            f"expenses of {fmt(data.get('expenses', 0))}, and a net income of {fmt(data.get('net income', 0))}."
+            f"This income statement reports revenue of"
+            f" {fmt(data.get('revenue', 0))}, expenses of"
+            f" {fmt(data.get('expenses', 0))}, and a net income of"
+            f" {fmt(data.get('net_income', 0))}."
         )
     return "No summary available."
 #Transformer pipelines and document classification##################################
-
-@st.cache_resource(show_spinner=True)
-def load_chatbot():
-    return pipeline("text-generation", model=distilgpt2)
-  
 def clear_sensitive_data():
-    st.session_state.chat_history = []
     st.session_state.financial_data = {}
     st.session_state.doc_type = "unsupported"
     st.session_state.user_consent_time = None
@@ -384,84 +409,9 @@ def check_inactivity():
         st.session_state["last_active"] = now
         
 
-def build_finance_prompt(user_question: str, financial_data: dict, doc_type: str, chat_history: list) -> str:
-    system_instructions = (
-        "You are a professional financial assistant specializing in analyzing financial documents such as balance sheets and income statements. "
-        "Answer clearly, concisely, and accurately based only on the financial data provided. "
-    )
-    data_summary_lines = []
-    for key, val in financial_data.items():
-        if key != "validation_notes" and isinstance(val, (int, float)):
-            data_summary_lines.append(f"{key.replace('_', ' ').title()}: R{val:,.2f}")
-    
-    data_summary = "\n".join(data_summary_lines) if data_summary_lines else "No finanacial data found."
-    #Include last few users and bot messages for context (up to last 6)############################
-    context = ""
-    for msg in chat_history[-6:]:
-        role = "User" if msg["role"] == "user" else "AI"
-        context += f"{role}: {msg['content']}\n"
-    prompt = (
-        f"{system_instructions}\n\n"
-        f"Financial data:\n{data_summary}\n\n"
-        f"Conversation history:\n{context}\n"
-        f"User question: {user_question}\n"
-        f"AI:"
-    )
-    return prompt[-3000:] if len(prompt) > 3000 else prompt
 
-def chatbot_ui():
-    """
-    streamlit UI for chatbot interaction.
-    """
-    st.subheader("Chat with AI")
-    st.markdown("""
-    <style>
-    div.stButton > button {
-        margin-top: 26px !important;
-        height: 36px !important;
-    }
-    div.st.TextInput > div > input {
-        height: 36px !important;
-    }
-    </style>
-    """, unsafe_allow_html=True)
-    
-    if st.session_state.get("clear_input", False):
-        st.session_state.chat_input = ""
-        st.session_state.clear_input = False
-    
-    st.markdown(
-        """
-        <div class="chat-input-container" style="width: 100%;">
-        """, unsafe_allow_html=True)
-    user_input = st.text_input("Ask financeBox AI about your fianacial doc", key="chat_input", placeholder="E.g., What is my net income?")   
-    send_clicked = st.button("Send", key="send_button", help="Send your question")
-    st.markdown("</div>", unsafe_allow_html=True)
-    
-    if send_clicked and user_input.strip():
-        st.session_state.chat_history.append({"role": "user", "content": user_input})
-        prompt = build_finance_prompt(user_input.strip(), financial_data, doc_type, st.session_state.chat_history)
-        try:
-            chatbot = load_chatbot()
-            response = chatbot(prompt, max_length=150, num_return_sequences=1, do_sample=True, temperature=0.7, pad_token_id=50256)
-            bot_reply = response[0]["generated_text"].strip()
-            
-            if bot_reply.lower().startswith(prompt.lower()):
-                bot_reply = bot_reply[len(prompt):].strip()
-        except Exception as e:
-            bot_reply = f"Sorry, AI could not respond right now. Error: {str(e)}"
-            logging.error(f"Chatbot error: {e}")
-        st.session_state.chat_history.append({"role": "bot", "content": bot_reply})
-        st.session_state.clear_input = True
-        st.rerun()
-        
-    if st.session_state.chat_history:
-        st.markdown("### Conversation")
-        for msg in st.session_state.chat_history:
-            if msg["role"] == "user":
-                st.markdown(f"**You:** {msg['content']}")
-            else:
-                st.markdown(f"**AI:** {msg['content']}")
+
+
 #Privacy and data control ui###########################################################################################                    
 def privacy_and_data_control_ui():
     st.sidebar.markdown("### Privacy & Data Control")
@@ -473,25 +423,18 @@ def privacy_and_data_control_ui():
     """)
     st.markdown("[Privacy policy](#) | [Terms of Service](#)")
     
-    if st.sidebar.button("Download Chat History"):
-        if st.session_state.chat_history:
-            chat_json = json.dumps(st.session_state.chat_history, indent=2)
-            st.sidebar.download_button("Download JSON", chat_json, file_name="chat_history.json", mime="application/json")
-        else:
-            st.sidebar.info("No chat history to download.")
-
 def delete_account_ui():
     st.markdown("Delete Account")
     if "confirm_delete" not in st.session_state:
         st.session_state.confirm_delete = False
     if not st.session_state.confirm_delete:
-        if st.sidebar.button("Delete Account"):
+        if st.sidebar.button("Delete Account", type="primary"):
             st.session_state.confirm_delete = True
     else:
         st.sidebar.warning("Are you sure? This action is irreversable.")
         col1, col2 = st.sidebar.columns(2)
         with col1:
-            if st.button("Confirm Delete"):
+            if st.button("Confirm Delete", type="primary"):
                 user_db = st.session_state.user_db
                 current_user = st.session_state.current_user
                 if current_user in user_db:
@@ -523,7 +466,7 @@ def main_app_ui():
     check_inactivity()
     inject_login_styles()
     st.sidebar.markdown(f"###Welcome: **{st.session_state.current_user}**!")
-    st.sidebar.markdown("### FinanceBox AI - Free version")
+    st.sidebar.markdown("### Finalyzer - Free version")
     privacy_and_data_control_ui()
     delete_account_ui()
     if st.sidebar.button("Log out", type="primary"):
@@ -535,8 +478,8 @@ def main_app_ui():
     if st.session_state.current_user == "demo_user":
         show_user_list()
         
-    st.title("FinanceBox AI")
-    st.caption("Upload a financial spreadsheet (Excel/CSV) and get simplified results.")
+    st.title("Finalyzer | SA Finance")
+    st.caption("An easy way to check if your balance sheet or income statement is healthy and follows south african tax rules.")
     #Agree checkbox bfore uploading###########33
     agree = st.checkbox("I agree to upload and processing of my financial doc.")
     if agree:
@@ -554,7 +497,7 @@ def main_app_ui():
     )
     
     if uploaded_files:
-        st.markdown("### Uploaded Documents")
+        st.markdown("### Uploaded Documents Analysis")
         for uploaded_file in uploaded_files:
             if uploaded_file.size > 10 * 1024 * 1024:
                 st.error(f"{uploaded_file.name} is too large. Max size is 10MB.")
@@ -583,77 +526,165 @@ def main_app_ui():
                 
                 financial_data = parse_dataframe_metrics(df, doc_type)
                 st.session_state.financial_data = financial_data
-                    
-                st.markdown(f"### {doc_type.replace('-', ' ').title()} Data")
-                cols = st.columns(3)
-                col_idx = 0
-                for key, value in financial_data.items():
-                    if key != "validation_notes" and isinstance(value, (int, float)):
-                        cols[col_idx % 3].metric(key.replace('_', ' ').title(), f"R{value:,.2f}")
-                        col_idx += 1    
-                if "validation_notes" in financial_data and financial_data["validation_notes"]:
-                    st.markdown("### Financial Health & Validation Checks")
-                    for note in financial_data["validation_notes"]:
-                        st.markdown(f"- {note}")
-                        #Show textual summary###############################################################
+                if len(df.columns) >= 6:
+                    cleaned_display_df = df.iloc[:, [0, 5]].copy()
+                else:
+                    cleaned_display_df = df.iloc[:, [0, min(1, len(df.columns)-1)]].copy()
+                cleaned_display_df.columns = ["Financial Line Item", "Amount (ZAR)"]
+                cleaned_display_df = cleaned_display_df.dropna(subset=["Amount (ZAR)"])
+                col_up, col_fb = st.columns(2)
+                with col_up:
+                    st.markdown("### Itemized Statement Breakdown")
+                    st.dataframe(cleaned_display_df, use_container_width=True)
+                with col_fb:
+                    st.markdown("### User Feedback")
+                    user_comment = st.text_area("We value your input! Share your thoughts using the for on the left to help us improve the web experience.:", key=f"fb_{uploaded_file.name}")
+                    if st.button("Submit Feedback", key=f"btn_{uploaded_file.name}"):
+                        if user_comment.strip():
+                            st.session_state.feedback_list.append({
+                                'Timestamp': datetime.datetime.now().strftime("%Y-%M-%d %H:%H:%S"),
+                                'Comment': user_comment.strip()
+                            })
+                            st.success("Thank you for your feedback!")
+                        else:
+                            st.warning("Please enter some feedback.")
+                st.sidebar.markdown("---")
+                st.sidebar.markdown("### SA Financial Config")
+                total_revenue = st.sidebar.number_input("Annual Revenue / Turnover (ZAR)", value=float(financial_data.get('revenue', 2500000.0)), step=50000.0)
+                current_assets = st.sidebar.number_input("Current Assets (ZAR)", value=float(financial_data.get('current_assets', 500000.0)), step=10000.0)
+                current_liabilities = st.sidebar.number_input("Current Liabilities (ZAR)", value=float(financial_data.get('current_liabilities', 300000.0)), step=10000.0)
+                total_liabilities = st.sidebar.number_input("Total Liabilities (ZAR)", value=float(financial_data.get('liabilities', 600000.0)), step=10000.0)
+                total_equity = st.sidebar.number_input("Total Equity (ZAR)", value=float(financial_data.get('equity', 400000.0)), step=10000.0)
+                
+                current_ratio = round(current_assets / current_liabilities, 2) if current_liabilities > 0 else 0.0
+                debt_to_equity = round(total_liabilities / total_equity, 2) if total_equity > 0 else 0.0
+                score = 100
+                if current_ratio < 1.0:
+                    score -= 35
+                elif current_ratio < 1.5:
+                    score -= 15
+                if debt_to_equity > 2.0:
+                    score -= 40
+                elif debt_to_equity > 1.0:
+                    score -= 20
+                health_score = max(score, 0)
+                
+                sars_checks = []
+                if total_revenue >= 2300000:
+                    sars_checks.append({
+                        "item": "Voluntary VAT Registration",
+                        "status": "Action Required",
+                        "detail": "Turnover meets or exceeds the R2.3M compulsory VAT threshold. Ensure registration with SARS."
+                    })
+                elif total_revenue >= 120000:
+                    sars_checks.append({
+                        "item": "Voluntary VAT Registration",
+                        "status": "Eligible",
+                        "detail": "Turnover qualifies for voluntary VAT registration (above R120,000)."
+                    })
+                else:
+                    sars_checks.append({
+                        "item": "Voluntary Threshold Status",
+                        "status": "Compliant",
+                        "detail": "Turnover is below compulsory VAT registration thresholds."
+                    })
+                
+
+   
+                st.markdown("---")
+                col1, col2, col3 = st.columns(3)
+                with col1:
+                    st.metric(label="Financial Health Score", value=f"{health_score}/100", delta="Healthy" if health_score >= 70 else "Needs Review")
+                with col2:
+                    st.metric(label="Current Ratio (Liquidity)", value=current_ratio, delta="Optimal > 1.5" if current_ratio >= 1.5 else "Low Liquidity")
+                with col3:
+                    st.metric(label="Debt-To-Equity", value=debt_to_equity, delta="Safe < 1.0" if debt_to_equity <= 1.0 else "High Leverage")
+                
+                st.markdown("### SARS Tax & Compliance Checks")
+                for check in sars_checks:
+                    if "Action Required" in check["status"]:
+                        st.error(f"**{check['item']}** ({check['status']}): {check['detail']}")
+                    elif "Eligible" in check["status"]:
+                        st.warning(f"**{check['item']}** ({check['status']}): {check['detail']}")
+                    else:
+                        st.success(f"**{check['item']}** ({check['status']}): {check['detail']}")
+                st.markdown("### MULTY-PERIOD Trend Simulation")
+                with st.expander("Compare with Previous Period"):
+                    prev_revenue = st.number_input("Previous Period Revenue (ZAR)", value=float(total_revenue * 0.9), step=50000.0)
+                    if prev_revenue > 0:
+                        growth_pct = round(((total_revenue - prev_revenue) / prev_revenue) * 100, 2)
+                        st.metric("Revenue Growth Year-over-Year", f"{growth_pct}%", delta="Growing" if growth_pct > 0 else "Declining")
+                    else:
+                        st.info("Enter previous period metrics to compute variance.")
                 summary_text = generate_summary(financial_data, doc_type)
                 st.info(summary_text)
-                        #CSV download for income statement data################################################
-                df_financial = pd.DataFrame(list(financial_data.items()), columns=["Metric", "Value"])
-                csv_financial = df_financial.to_csv(index=False).encode('utf-8')
+                
+                st.markdown("---")
+                table_html = cleaned_display_df.to_html(classes='dataframe', index=False)
+                html_report = f"""
+                <html>
+                <head>
+                    <style>
+                        body {{ font-family: Arial, sans-serif; color: #333; padding: 20px; }}
+                        h1 {{ color: #0f172a; border-bottom: 2px solid #cbd5e1; padding-bottom: 10px; }}
+                        .card {{ background: #f8fafc; padding: 15px; margin-bottom: 15px; border-radius: 8px; border: 1px solid #e2e8f0; }}
+                        .score {{ font-size: 24px; font-weight: bold; color: #2563eb; }}
+                        table.dataframe {{ width: 100%; border-collapse: collapse; margin-top: 10px; }}
+                        table.dataframe th, table.dataframe td {{ border: 1px solid #cbd5e1; padding: 8px; text-align: left; font-size: 14px; }}
+                        table.dataframe th, {{ background-color: #f1f5f9; }}
+                    </style>
+                </head>
+                <body>
+                    <h1>Finalyzer - SA Executive Financial Health Report</h1>
+                    <div class="card">
+                        <h3>Financial Health Score</h3>
+                        <p class="score">{health_score}/100</p>
+                    </div>
+                    <div class="card">
+                        <h3>Core Ratios</h3>
+                        <p><b>Current Ratio:</b> {current_ratio}</p>
+                        <p><b>Debt-to-Equity Ratio:</b> {current_ratio}</p>
+                    </div>
+                    <div class="card">
+                        <h3>SARS Compliance Status</h3>
+                        <p><b>{sars_checks[0]['item']}:</b> {sars_checks[0]['status']} - {sars_checks[0]['detail']}</p>
+                    </div>
+                    <div class="card">
+                        <h3>Itemized Statement</h3>
+                        {table_html}
+                    </div>
+                </body>
+                </html>
+                """
                 st.download_button(
-                    label="Download {uploaded_file.name} Analysis (CSV)",
-                    data=csv_financial,
-                    file_name=f"{doc_type}_data.csv",
-                    mime="text/csv"
+                    label=f"Download Branded Report for {uploaded_file.name} (HTML)",
+                    data=html_report,
+                    file_name=f"Finalyzer_Report_{uploaded_file.name}.html",
+                    mime="text/html",
+                   
                 )
-                    
+                
                 st.markdown("---")
     else:
         st.info("Upload your financial document to begin analysis.")
         
-    st.markdown("---")
-    #User feedback session##############################################################3
-    st.header("📰 User Feedback")
-    user_comment = st.text_area("Please share your feedback or suggestions to improve financebox AI:")
-    if st.button("Submit Feedback"):
-        if user_comment.strip():
-            st.session_state.feedback_list.append({
-                'Timestamp': datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                'Comment': user_comment.strip()
-            })
-            st.success("Thank you for your feedback!")
-        else:
-            st.warning("Please enter some feedback before submitting.")
-    #Admin feedback dashboard (only visible to admin)########################################33
+     
     if st.session_state.current_user == "demo_user":
         st.markdown("---")
         st.header("Admin Feedback Dashboard")
         if st.session_state.feedback_list:
             st.info(f"total feedback entries: {len(st.session_state.feedback_list)}")
-            col1, col2 = st.columns([2, 1])
-            with col1:
-                st.subheader("Recent Feedback")
-                for entry in reversed(st.session_state.feedback_list):
-                    st.markdown(f"**{entry['Timestamp']}**")
-                    st.info(entry['Comment'])
-            with col2:
-                st.subheader("Export & Manage")
-                df_feedback = pd.DataFrame(st.session_state.feedback_list)
-                csv_data = df_feedback.to_csv(index=False).encode('utf-8')
-                st.download_button(
-                    label="Download feedback as CSV",
-                    data=csv_data,
-                    file_name=f"FinanceBox_Feedback_{datetime.datetime.now().strftime('%Y%m%d')}.csv",
-                    mime="text/csv",
-                )
-                if st.button("Clear Feedback Logs"):
-                    st.session_state.feedback_list = []
-                    st.rerun()
+            for entry in reversed(st.session_state.feedback_list):
+                st.markdown(f"**{entry['Timestamp']}**")
+                st.info(entry['Comment'])
+            
+            if st.button("Clear Feedback Logs"):
+                st.session_state.feedback_list = []
+                st.rerun()
         else:
-            st.write("No feedback submitted yet.")
-    chatbot_ui()
-
+            st.info("Admin Dashboard: No feedback entries yet.")
+      
+      
         
 def login_ui():
     """
@@ -662,7 +693,7 @@ def login_ui():
     inject_login_styles()
     st.markdown("""
         <div style="text-align: center; margin-top: 5px; margin-bottom: 5px; width: 100%; display: block;">
-            <h1 style="font-size: 48px; font-weight: 900; color: blue !important; margin: 0; padding: 0;">FinanceBox AI </h1>       
+            <h1 style="font-size: 48px; font-weight: 900; color: blue !important; margin: 0; padding: 0;">Finalyzer </h1>       
             <p style="text-align: center"; "color: blue !important"; font-size: 18px; margin-top: 4px;">Minimalist Document Analyst</p>
         </div>
     """, unsafe_allow_html=True)
@@ -684,7 +715,7 @@ def login_ui():
             if st.button("Create Account", type="secondary"):
                st.session_state.auth_page = "Register"
                st.rerun()                   
-        if st.button("Login FinanceBox AI", type="primary"):  
+        if st.button("Login Finalyzer", type="primary"):  
             if login_user in st.session_state.user_db:
                 stored = st.session_state.user_db[login_user]
                 if isinstance(stored, dict) and "hash" in stored:
