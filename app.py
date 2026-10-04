@@ -16,7 +16,7 @@ import base64
 import threading
 from email.message import EmailMessage
 DEVELOPER_EMAIL = "katlegokirra@gmail.com"
-GMAIL_APP_PASSWORD = "Finance1964"
+GMAIL_APP_PASSWORD = "yogqyswdhrphwggi"
 
 logging.basicConfig(level=logging.INFO)
 def inject_login_styles():
