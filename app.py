@@ -14,11 +14,12 @@ import time
 import bcrypt
 import base64
 import threading
+from email.message import EmailMessage
+DEVELOPER_EMAIL = "katlegokirra@gmail.com"
+GMAIL_APP_PASSWORD = "Finance1964"
+
 logging.basicConfig(level=logging.INFO)
 def inject_login_styles():
-    """
-    custom css styles for login and app ui
-    """
     st.markdown("""
         <style>
         html, body, .stApp, .AppHost [data-testid="stApp"] { background: radial-gradient(circle at top right,  #0F172A, #020617) !important; }
@@ -40,14 +41,12 @@ def inject_login_styles():
             background-color: blue !important;
             color: blue !important;
             border-color: #3B82F6 !important;
-        }
-       
+        } 
         [data-testid="stFileUploader"] section {
             background-color: #0F172A !important;
             border: 2px dashed #3B82F6 !important;
             border-radius: 10px !important;
-        }
-        
+        } 
         [data-testid="stFileUploader"] section button {
             background-color: #2563EB !important;
             color: white !important;
@@ -78,8 +77,7 @@ def inject_login_styles():
             -webkit-background-clip: text !important;
             -webkit-text-fill-color: transparent !important;
             font-weight: 800 !important;
-            letter-spacing: -0.05rem !important;
-            
+            letter-spacing: -0.05rem !important;  
         }
         div.stButton > button[kind="primary"] {
             background: linear-gradient(135deg, #2563EB, #4F46E5) !important;
@@ -95,8 +93,6 @@ def inject_login_styles():
             color: #FFFFFF !important;
             border: none !important;
         }
-
-        
         div.stButton > button[kind="secondary"] {
             background-color: rgba(255, 255, 255, 0.03) !important;
             color: #94A3B8 !important;
@@ -110,14 +106,12 @@ def inject_login_styles():
             color: white !important;
             border-color: #475569 !important;
         }
-        
         div[data-baseweb="input"],
         div[data-baseweb="base-input"] {
             background-color: #0F172A !important;
             border: 1px solid #2563EB !important;
             border-radius: 10px !important;
         }
-        
         div[data-baseweb="input"] input {
             color: white !important;
             -webkit-text-fill-color: white !important;
@@ -163,17 +157,10 @@ db_lock = threading.Lock()#handle multiple users improves prevents data corrupti
 DB_FILE = "user_database_profiles.json"
 #####password utilities###############################################333333
 def hash_password(password):
-    """
-    Hash a password with optional salt.
-    Returns (salt, hash_password).
-    """
     hashed = bcrypt.hashpw(password.encode(), bcrypt.gensalt())
     return base64.b64encode(hashed).decode()
 
 def verify_password(stored_hash_b64, password_attempt):
-    """
-    Verify password by hashing attempt with stored salt and comparing to stored hash.
-    """
     try:
         hashed = base64.b64decode(stored_hash_b64)
         return bcrypt.checkpw(password_attempt.encode(), hashed)
@@ -182,9 +169,6 @@ def verify_password(stored_hash_b64, password_attempt):
         return False
 
 def check_password_strength(password):
-    """
-    Check password strength with multiple criteria.
-    """
     if len(password) < 8:
         return False, "Password must be at least 8 characters long."
     if not re.search(r"[A-Z]", password):
@@ -198,20 +182,12 @@ def check_password_strength(password):
     return True, "Strong password!"
 
 def validate_username(username):
-    """
-    validate username with rules:
-    -8 to 20 characters
-    -letters, numbers, underscores only
-    """
     if not 3 <= len(username) <= 20:
         return False, "Username must be between 8 and 20 characters."
     if not re.match(r"^\w+$", username):
         return False, "Username can only contain letters, numbers, and underscores."
     return True, ""
 def save_to_local_database(db_dict):
-    """
-    Save user database dictionary to JSON file.
-    """
     try:
         with db_lock:
             with open(DB_FILE, "w") as f:
@@ -235,7 +211,7 @@ def load_local_database():
         
 #seesion state initialization##########3
 
-st.set_page_config(page_title="Finalyzer", layout="centered")
+st.set_page_config(page_title="Finalizer", layout="centered")
 if "logged_in" not in st.session_state:
     st.session_state.logged_in = False
 if "reset_trigger" not in st.session_state:
@@ -262,9 +238,7 @@ if "feedback_list" not in st.session_state:
     st.session_state.feedback_list = []
 if "clear_input" not in st.session_state:
     st.session_state.clear_input = False
-#ui login style################################################################################################
 
-###pdf text extraction############################################
 @st.cache_data(show_spinner=False)
 def load_financial_file(file_bytes, file_name):
     try:
@@ -297,15 +271,12 @@ def detect_document_type_from_df(df):
     text_blob = " ".join([str(col).lower() for col in df.columns])
     for idx, row in df.head(15).iterrows():
         text_blob += " " + " ".join([str(val).lower() for val in row.values if pd.notna(val)])
-
     if any(k in text_blob for k in ["balance sheet", "assets", "liabilities", "equity"]):
         return "balance_sheet"
     elif any(k in text_blob for k in ["income statement", "profit", "revenue", "expenses", "sales", "turnover"]):
         return "income_statement"
     else:
         return "unsupported"    
-
-
 
 def parse_dataframe_metrics(df, doc_type):
     if doc_type == "balance_sheet":
@@ -407,18 +378,11 @@ def check_inactivity():
         st.rerun()
     else:
         st.session_state["last_active"] = now
-        
-
-
-
-
 #Privacy and data control ui###########################################################################################                    
 def privacy_and_data_control_ui():
     st.sidebar.markdown("### Privacy & Data Control")
     st.sidebar.info("""
     - Your uploaded documents are processed locally and not stored permanently.
-    - Chat history is stored only for your current session and can be cleared anytime.
-    - AI responses are generated based on extracted financial data; please verify critical decisions.
     - Data is encrypted and never used to train public AI models.
     """)
     st.markdown("[Privacy policy](#) | [Terms of Service](#)")
@@ -451,7 +415,33 @@ def delete_account_ui():
             if st.button("Cancel"):
                 st.session_state.confirm_delete = False
                 st.rerun()
-                
+def feedback_sidebar_ui():
+    st.sidebar.markdown("---")
+    st.sidebar.markdown("Beta Feedback")
+    with st.sidebar.form("feedback_form"):
+        user_email = st.text_input("Your Email (optional):")
+        feedback_text = st.text_area("Thoughts or bug reports?")
+        submitted = st.form_submit_button("Send Feedback")
+        if submitted:
+            if not feedback_text.strip():
+                st.warning("Please enter some feedback first.")
+            else:
+                try:
+                    msg = EmailMessage()
+                    msg.set_content(
+                        f"New feedback from Finalizer user:"
+                        f" {st.session_state.current_user}\nUser Email Provided:"
+                        f" {user_email}\n\nFeedback:\n{feedback_text}"
+                    )
+                    msg["Subject"] = "Finalizer Beta Feedback"
+                    msg["From"] = DEVELOPER_EMAIL
+                    msg["To"] = DEVELOPER_EMAIL
+                    with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
+                        server.login(DEVELOPER_EMAIL, EMAIL_APP_PASSWORD)
+                        server.send_message(msg)
+                    st.success("Thank You! Feedback sent to developer.")
+                except Exception as e:
+                    st.error("Could not send email right now.")    
 #A show list for admin###########################                    
 def show_user_list():
     st.subheader("Registered Users")
@@ -466,19 +456,21 @@ def main_app_ui():
     check_inactivity()
     inject_login_styles()
     st.sidebar.markdown(f"###Welcome: **{st.session_state.current_user}**!")
-    st.sidebar.markdown("### Finalyzer - Free version")
+    st.sidebar.markdown("Finalizer - Free Beta")
     privacy_and_data_control_ui()
     delete_account_ui()
+    feedback_sidebar_ui()
     if st.sidebar.button("Log out", type="primary"):
         clear_sensitive_data()
         st.session_state.logged_in = False
         st.session_state.current_user = None
         st.rerun()
+        
+    
     #Show user list only for admin######################################3
     if st.session_state.current_user == "demo_user":
         show_user_list()
-        
-    st.title("Finalyzer | SA Finance")
+    st.title("Finalizer | SA Finance")
     st.caption("An easy way to check if your balance sheet or income statement is healthy and follows south african tax rules.")
     #Agree checkbox bfore uploading###########33
     agree = st.checkbox("I agree to upload and processing of my financial doc.")
@@ -515,7 +507,6 @@ def main_app_ui():
                     st.warning("No readable text was found in this file.")
                     continue
                 
-                
                 doc_type = detect_document_type_from_df(df)
                 st.session_state.doc_type = doc_type
                 st.markdown(f"**Detected Document Type:** {doc_type.replace('_', ' ').title()}")
@@ -532,22 +523,10 @@ def main_app_ui():
                     cleaned_display_df = df.iloc[:, [0, min(1, len(df.columns)-1)]].copy()
                 cleaned_display_df.columns = ["Financial Line Item", "Amount (ZAR)"]
                 cleaned_display_df = cleaned_display_df.dropna(subset=["Amount (ZAR)"])
-                col_up, col_fb = st.columns(2)
-                with col_up:
-                    st.markdown("### Itemized Statement Breakdown")
-                    st.dataframe(cleaned_display_df, use_container_width=True)
-                with col_fb:
-                    st.markdown("### User Feedback")
-                    user_comment = st.text_area("We value your input! Share your thoughts using the for on the left to help us improve the web experience.:", key=f"fb_{uploaded_file.name}")
-                    if st.button("Submit Feedback", key=f"btn_{uploaded_file.name}"):
-                        if user_comment.strip():
-                            st.session_state.feedback_list.append({
-                                'Timestamp': datetime.datetime.now().strftime("%Y-%M-%d %H:%H:%S"),
-                                'Comment': user_comment.strip()
-                            })
-                            st.success("Thank you for your feedback!")
-                        else:
-                            st.warning("Please enter some feedback.")
+               
+                st.markdown("### Itemized Statement Breakdown")
+                st.dataframe(cleaned_display_df, use_container_width=True)
+               
                 st.sidebar.markdown("---")
                 st.sidebar.markdown("### SA Financial Config")
                 total_revenue = st.sidebar.number_input("Annual Revenue / Turnover (ZAR)", value=float(financial_data.get('revenue', 2500000.0)), step=50000.0)
@@ -588,9 +567,6 @@ def main_app_ui():
                         "status": "Compliant",
                         "detail": "Turnover is below compulsory VAT registration thresholds."
                     })
-                
-
-   
                 st.markdown("---")
                 col1, col2, col3 = st.columns(3)
                 with col1:
@@ -599,7 +575,6 @@ def main_app_ui():
                     st.metric(label="Current Ratio (Liquidity)", value=current_ratio, delta="Optimal > 1.5" if current_ratio >= 1.5 else "Low Liquidity")
                 with col3:
                     st.metric(label="Debt-To-Equity", value=debt_to_equity, delta="Safe < 1.0" if debt_to_equity <= 1.0 else "High Leverage")
-                
                 st.markdown("### SARS Tax & Compliance Checks")
                 for check in sars_checks:
                     if "Action Required" in check["status"]:
@@ -635,7 +610,7 @@ def main_app_ui():
                     </style>
                 </head>
                 <body>
-                    <h1>Finalyzer - SA Executive Financial Health Report</h1>
+                    <h1>Finalizer - SA Executive Financial Health Report</h1>
                     <div class="card">
                         <h3>Financial Health Score</h3>
                         <p class="score">{health_score}/100</p>
@@ -659,33 +634,13 @@ def main_app_ui():
                 st.download_button(
                     label=f"Download Branded Report for {uploaded_file.name} (HTML)",
                     data=html_report,
-                    file_name=f"Finalyzer_Report_{uploaded_file.name}.html",
+                    file_name=f"Finalizer_Report_{uploaded_file.name}.html",
                     mime="text/html",
-                   
                 )
-                
                 st.markdown("---")
     else:
         st.info("Upload your financial document to begin analysis.")
-        
-     
-    if st.session_state.current_user == "demo_user":
-        st.markdown("---")
-        st.header("Admin Feedback Dashboard")
-        if st.session_state.feedback_list:
-            st.info(f"total feedback entries: {len(st.session_state.feedback_list)}")
-            for entry in reversed(st.session_state.feedback_list):
-                st.markdown(f"**{entry['Timestamp']}**")
-                st.info(entry['Comment'])
-            
-            if st.button("Clear Feedback Logs"):
-                st.session_state.feedback_list = []
-                st.rerun()
-        else:
-            st.info("Admin Dashboard: No feedback entries yet.")
-      
-      
-        
+    
 def login_ui():
     """
     streamlit UI for login, registration, and password reset.
@@ -693,7 +648,7 @@ def login_ui():
     inject_login_styles()
     st.markdown("""
         <div style="text-align: center; margin-top: 5px; margin-bottom: 5px; width: 100%; display: block;">
-            <h1 style="font-size: 48px; font-weight: 900; color: blue !important; margin: 0; padding: 0;">Finalyzer </h1>       
+            <h1 style="font-size: 48px; font-weight: 900; color: blue !important; margin: 0; padding: 0;">Finalizer </h1>       
             <p style="text-align: center"; "color: blue !important"; font-size: 18px; margin-top: 4px;">Minimalist Document Analyst</p>
         </div>
     """, unsafe_allow_html=True)
@@ -715,7 +670,7 @@ def login_ui():
             if st.button("Create Account", type="secondary"):
                st.session_state.auth_page = "Register"
                st.rerun()                   
-        if st.button("Login Finalyzer", type="primary"):  
+        if st.button("Login Finalizer", type="primary"):  
             if login_user in st.session_state.user_db:
                 stored = st.session_state.user_db[login_user]
                 if isinstance(stored, dict) and "hash" in stored:
