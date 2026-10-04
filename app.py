@@ -653,7 +653,7 @@ def login_ui():
         </div>
     """, unsafe_allow_html=True)
     
-    MAX_LOGIN_ATTEMPTS = 5
+    MAX_LOGIN_ATTEMPTS = 10
     if st.session_state.login_attempts >= MAX_LOGIN_ATTEMPTS:
         st.error("Too many failed login attempts. Please try again later.")
         return
