@@ -405,7 +405,7 @@ def delete_account_ui():
 def feedback_sidebar_ui():
     st.sidebar.markdown("---")
     st.sidebar.markdown("Beta Feedback")
-    with st.sidebar.form("feedback_form"):
+    with st.sidebar.form("feedback_form", clear_on_submit=True):
         user_email = st.text_input("Your Email (optional):")
         feedback_text = st.text_area("Thoughts or bug reports?")
         submitted = st.form_submit_button("Send Feedback")
@@ -413,13 +413,20 @@ def feedback_sidebar_ui():
             if not feedback_text.strip():
                 st.warning("Please enter some feedback first.")
             else:
-                feedback_entry = {
-                    "user": st.session_state.current_user,
-                    "email": user_email,
-                    "text": feedback_text,
-                    "time": datetime.datetime.now().isoformat(),
+                feedback_data = {
+                    "Timestamp": [datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")],
+                    "User": [str(st.session_state.current_user)],
+                    "Email": [user_email if user_email else "Anonymous"],
+                    "Comment": [feedback_text]
+                    
                 }
-                st.session_state.feedback_list.append(feedback_entry)    
+                df_feedback = pd.DataFrame(feedbackdata)
+                csv_file = "feedback_csv"
+                if os.path.exists(csv_file):
+                    df_feedback.to_csv(csv_file, mode='a', header=False, index=False)
+                else:
+                    df_feedback.to_csv(csv_file, mode='w', header=True, index=False)
+                    
                 st.success("Thank You! Feedback sent to successfully.")
                           
        
