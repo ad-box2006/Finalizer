@@ -289,7 +289,7 @@ def parse_balance_sheet_metrics(df):
     keywords = {      
         "assets": ["total assets"],
         "current_assets": ["total current assets"],
-        "non-current assets": ["total fixed assets", "total non-current assets", "non-current assets", "fixed_assets"],
+        "non-current assets": ["total fixed assets", "total non-current assets", "non-current assets"],
         "cash": ["cash and cash equivalents", "cash"],
         "liabilities": ["total liabilities", "liabilities"],
         "current_liabilities": ["total current liabilities", "current liabilities"],
@@ -320,18 +320,15 @@ def parse_balance_sheet_metrics(df):
     tot_assets = data.get("assets", 0)
     tot_liab = data.get("liabilities", 0)
     tot_equity = data.get("equity", 0)
-    if tot_liab == 0 and tot_equity > 0:
-        expected_le = tot_equity
-    elif tot_equity == 0 and tot_liab > 0:
-         expected_le = tot_liab > 0
          
     if tot_assets > 0 and (tot_liab > 0 or tot_equity > 0):
         expected_le = tot_liab + tot_equity
-        if abs(tot_assets - expected_le) > 1.0:
+        if abs(tot_assets - expected_le) > 5.0:
             validation_notes.append(f"Balance Sheet check notice: Total Assets (R{tot_assets:,.2f}) do not equal Total Liabilities & Equity (R{expected_le:,.2f}). Please check your spread sheet entries are mapped correctly.")
         else:
             validation_notes.append(f"Balance Sheet equation verified: Total Assets (R{tot_assets:,.2f}) matches Total Liabilities & Equity (R{expected_le:,.2f}).")
-       
+    else:
+        validation_notes.append(f"Balance Sheet parsed successfully.")
     data["validation_notes"] = validation_notes
     return data
 #Generate textual summary of financial data#########################################################################33
@@ -420,7 +417,7 @@ def feedback_sidebar_ui():
                     "Comment": [feedback_text]
                     
                 }
-                df_feedback = pd.DataFrame(feedbackdata)
+                df_feedback = pd.DataFrame(feedback_data)
                 csv_file = "feedback_csv"
                 if os.path.exists(csv_file):
                     df_feedback.to_csv(csv_file, mode='a', header=False, index=False)
@@ -493,9 +490,10 @@ def main_app_ui():
                 df = df.dropna(how='all').dropna(axis=1, how='all').reset_index(drop=True)
                 text_col = df.columns[0]
                 
-                for col in df.columns[1:]:
+                for col in df.columns:
                     sample_vals = df[col].dropna().head(10)
-                    if any(isinstance(v, str) and len(str(v).strip()) > 3 for v in sample_vals):
+                    text_count = sum(1 for v in sample_vals if isinstance(v, str) and not re.match(r"^[\d,\.\sR-]+$", v))
+                    if text_count > 2:
                         text_col = col
                         break
                 amount_col = None
@@ -543,28 +541,35 @@ def main_app_ui():
                 elif debt_to_equity > 1.0:
                     score -= 20
                 health_score = max(score, 0)
-                sars_checks = [
-                    {
-                        "item": "Solvency & Capital Adequacy",
-                        "status": "Compliant" if total_assets >= total_liabilities else "Risk Detected",
-                        "detail": "Assets exceed liabilities ensuring positive net worth." if total_assets >= total_liabilities else "Technical insolvency warning."
-                    },
-                    {
-                        "item": "Liquidity Threshold (Current Ratio)",
-                        "status": "Optimal" if current_ratio >= 1.0 else "Sub_optimal",
-                        "detail": f"Current ratio stands at {current_ratio}."
-                    }
-                ]
                 st.markdown("---")
                 col1, col2, col3 = st.columns(3)
                 with col1:
-                    st.metric(label="Solviency & Health Score", value=f"{health_score}/100", delta="Healthy" if health_score >= 70 else "Needs Review")
+                    st.metric(label="Solvency & Health Score", value=f"{health_score}/100", delta="Healthy" if health_score >= 70 else "Needs Review")
                 with col2:
                     st.metric(label="Current Ratio (Liquidity)", value=current_ratio, delta="Optimal > 1.5" if current_ratio >= 1.5 else "Low Liquidity")
                 with col3:
                     st.metric(label="Debt-To-Equity", value=debt_to_equity, delta="Safe < 1.0" if debt_to_equity <= 1.0 else "High Leverage")
+                st.markdown("---")
+                sars_checks = [
+                    {
+                        "item": "Solvency & Capital Adequacy",
+                        "status": "Compliant" if total_assets >= total_liabilities else "Risk Detected",
+                        "detail": f"Assets (R{total_assets:,.2f}) exceed liabilities (R{total_liabilities:,.2f}) ensuring positive net worth." if total_assets >= total_liabilities else f"Liabilities (R{total_liabilities:,.2f}) exceed assets (R{total_assets:,.2f})."
+                    },
+                    {
+                        "item": "Liquidity Threshold (Current Ratio)",
+                        "status": "Optimal" if current_ratio >= 1.0 else "Sub_optimal",
+                        "detail": f"Current ratio is {current_ratio} (Target: > 1.5)."
+                    }
+                ]
+                for item_dict in sars_checks:
+                    if item_dict["status"] in ["Compliant", "Optimal"]:
+                        st.success(f"**{item_dict['item']}**: {item_dict['status']} - {item_dict['detail']}")
+                    else:
+                        st.warning(f"**{item_dict['item']}**: {item_dict['status']} - {item_dict['detail']}")
                 
-                st.markdown("### Accounting Equation Varification")
+                
+                st.markdown("### Accounting Equation Verification")
                 for note in financial_data.get("validation_notes", []):
                     if "Mismatch" in note:
                   
