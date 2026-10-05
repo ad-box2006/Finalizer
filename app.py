@@ -14,9 +14,6 @@ import time
 import bcrypt
 import base64
 import threading
-from email.message import EmailMessage
-DEVELOPER_EMAIL = "katlegokirra@gmail.com"
-GMAIL_APP_PASSWORD = "yogqyswdhrphwggi"
 
 logging.basicConfig(level=logging.INFO)
 def inject_login_styles():
@@ -240,14 +237,34 @@ if "clear_input" not in st.session_state:
     st.session_state.clear_input = False
 
 @st.cache_data(show_spinner=False)
-def load_financial_file(file_bytes, file_name):
+def load_balance_sheet_file(file_bytes, file_name):
     try:
         if file_name.endswith('.csv'):
-            df = pd.read_csv(BytesIO(file_bytes))
+            df = pd.read_csv(BytesIO(file_bytes), header=None)
         else:
             xls = pd.ExcelFile(BytesIO(file_bytes))
-            sheet_name = xls.sheet_names[0]
-            df = pd.read_excel(xls, sheet_name=sheet_name)
+            best_sheet = xls.sheet_names[0]
+            max_filled = -1
+            for sheet in xls.sheet_names:
+                temp = pd.read_excel(xls, sheet_name=sheet, header=None)
+                filled_count = temp.notna().sum().sum()
+                if filled_count > max_filled:
+                    max_filled = filled_count
+                    best_sheet = sheet
+               
+            df = pd.read_excel(xls, sheet_name=best_sheet, header=None)
+            header_idx = 0
+            for idx, row in df.head(12).iterrows():
+                row_text = " ".join([str(val).lower() for val in row.values if pd.notna(val)])
+                if any(k in row_text for k in ["assets", "liabilities", "equity", "balance sheet", "description", "item", "account"]):
+                    header_idx = idx
+                    break
+            if header_idx > 0:
+                df.columns = df.iloc[header_idx]
+                df = df.iloc[header_idx + 1:].reset_index(drop=True)
+            else:
+                df.columns = [f"col_{i}" for i in range(df.shape[1])]
+           
         return df
     except Exception as e:
         logging.exception("File loading failed")
@@ -267,34 +284,18 @@ def clean_number(value_str):
     except:
         return None
     
-def detect_document_type_from_df(df):
-    text_blob = " ".join([str(col).lower() for col in df.columns])
-    for idx, row in df.head(15).iterrows():
-        text_blob += " " + " ".join([str(val).lower() for val in row.values if pd.notna(val)])
-    if any(k in text_blob for k in ["balance sheet", "assets", "liabilities", "equity"]):
-        return "balance_sheet"
-    elif any(k in text_blob for k in ["income statement", "profit", "revenue", "expenses", "sales", "turnover"]):
-        return "income_statement"
-    else:
-        return "unsupported"    
 
-def parse_dataframe_metrics(df, doc_type):
-    if doc_type == "balance_sheet":
-        keywords = {      
-            "assets": ["total assets"],
-            "current_assets": ["total current assets"],
-            "non-current assets": ["total fixed assets", "total non-current assets", "non-current assets", "fixed_assets"],
-            "cash": ["cash and cash equivalents", "cash"],
-            "liabilities": ["total liabilities", "liabilities"],
-            "current_liabilities": ["total current liabilities", "current liabilities"],
-            "equity": ["total equity"]
-        }
-    else:
-        keywords = {
-            "revenue": ["total revenue", "revenue", "sales", "turnover", "net sales"],
-            "expenses": ["total expenses", "operating expenses", "cost of goods sold", "cogs", "expenses"],
-            "net_income": ["net income", "net profit", "profit", "net earnings"]
-        }  
+def parse_balance_sheet_metrics(df):
+    keywords = {      
+        "assets": ["total assets"],
+        "current_assets": ["total current assets"],
+        "non-current assets": ["total fixed assets", "total non-current assets", "non-current assets", "fixed_assets"],
+        "cash": ["cash and cash equivalents", "cash"],
+        "liabilities": ["total liabilities", "liabilities"],
+        "current_liabilities": ["total current liabilities", "current liabilities"],
+        "equity": ["total equity"]
+    }
+    
     data = {}
     df = df.dropna(how='all').reset_index(drop=True)
     for key, kw_list in keywords.items():
@@ -304,7 +305,7 @@ def parse_dataframe_metrics(df, doc_type):
             if not row_vals:
                 continue
             row_str = " ".join(row_vals)
-            matched = any(kw == row_vals[0] for kw in row_str for kw in kw_list)
+            matched = any(kw in row_str for kw in kw_list)
             if matched:
                 for val in row.values:
                     num = clean_number(val)
@@ -316,50 +317,36 @@ def parse_dataframe_metrics(df, doc_type):
         data[key] = found_val
         
     validation_notes = []
-    if doc_type == "balance_sheet":
-        tot_assets = data.get("assets", 0)
-        tot_liab = data.get("liabilities", 0)
-        tot_equity = data.get("equity", 0)
-        if tot_assets > 0 and (tot_liab > 0 or tot_equity > 0):
-            expected_le = tot_liab + tot_equity
-            if abs(tot_assets - expected_le) > 1.0:
-                validation_notes.append(f"Balance Sheet Mismatch: Assets (R{tot_assets:,.2f}) != Liabilities + Equity (R{expected_le:,.2f})")
-            else:
-                validation_notes.append(f"Balance Sheet equation balances perfectly! Assets (R{tot_assets:,.2f}) = Liabilities + Equity (R{expected_le:,.2f})")
-    elif doc_type == "income_statements":
-        rev = data.get("revenue", 0.0)
-        exp = data.get("expenses", 0.0)
-        net = data.get("net_income", 0.0)
-        if rev > 0 and exp > 0:
-            calculated_net = rev - exp
-            data["calculated_net_income"] = calculated_net
-            if net == 0.0:
-                data["net_income"] = calculated_net
-                validation_notes.append(f"Net Income was inferred via formula (Revenue - Expenses): R{calculated_net:,.2f}")
-            else:
-                validation_notes.append("Income statement formula checks out cleanly.")
+    tot_assets = data.get("assets", 0)
+    tot_liab = data.get("liabilities", 0)
+    tot_equity = data.get("equity", 0)
+    if tot_liab == 0 and tot_equity > 0:
+        expected_le = tot_equity
+    elif tot_equity == 0 and tot_liab > 0:
+         expected_le = tot_liab > 0
+         
+    if tot_assets > 0 and (tot_liab > 0 or tot_equity > 0):
+        expected_le = tot_liab + tot_equity
+        if abs(tot_assets - expected_le) > 1.0:
+            validation_notes.append(f"Balance Sheet check notice: Total Assets (R{tot_assets:,.2f}) do not equal Total Liabilities & Equity (R{expected_le:,.2f}). Please check your spread sheet entries are mapped correctly.")
+        else:
+            validation_notes.append(f"Balance Sheet equation verified: Total Assets (R{tot_assets:,.2f}) matches Total Liabilities & Equity (R{expected_le:,.2f}).")
+       
     data["validation_notes"] = validation_notes
     return data
 #Generate textual summary of financial data#########################################################################33
-def generate_summary(data, doc_type):
+def generate_summary(data):
     def fmt(val):
         return f"R{val:,.2f}" if isinstance(val, (int, float)) and val != 0 else "R0.00"
     
-    if doc_type == "balance_sheet":
-        return (
-            f"This balance sheet shows total assets of"
-            f" {fmt(data.get('assets', 0))}, total liabilities of"
-            f" {fmt(data.get('liabilities', 0))}, and equity of"
-            f" {fmt(data.get('equity', 0))}."
-        )
-    elif doc_type == "income_statement":
-        return (
-            f"This income statement reports revenue of"
-            f" {fmt(data.get('revenue', 0))}, expenses of"
-            f" {fmt(data.get('expenses', 0))}, and a net income of"
-            f" {fmt(data.get('net_income', 0))}."
-        )
-    return "No summary available."
+    
+    return (
+        f"This balance sheet reports total assets of"
+        f" {fmt(data.get('assets', 0))}, total liabilities of"
+        f" {fmt(data.get('liabilities', 0))}, and equity of"
+        f" {fmt(data.get('equity', 0))}."
+    )
+   
 #Transformer pipelines and document classification##################################
 def clear_sensitive_data():
     st.session_state.financial_data = {}
@@ -382,7 +369,7 @@ def check_inactivity():
 def privacy_and_data_control_ui():
     st.sidebar.markdown("### Privacy & Data Control")
     st.sidebar.info("""
-    - Your uploaded documents are processed locally and not stored permanently.
+    - Balance sheets are processed locally and not stored permanently.
     - Data is encrypted and never used to train public AI models.
     """)
     st.markdown("[Privacy policy](#) | [Terms of Service](#)")
@@ -426,37 +413,22 @@ def feedback_sidebar_ui():
             if not feedback_text.strip():
                 st.warning("Please enter some feedback first.")
             else:
-                try:
-                    msg = EmailMessage()
-                    msg.set_content(
-                        f"New feedback from Finalizer user:"
-                        f" {st.session_state.current_user}\nUser Email Provided:"
-                        f" {user_email}\n\nFeedback:\n{feedback_text}"
-                    )
-                    msg["Subject"] = "Finalizer Beta Feedback"
-                    msg["From"] = DEVELOPER_EMAIL
-                    msg["To"] = DEVELOPER_EMAIL
-                    with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
-                        server.login(DEVELOPER_EMAIL, EMAIL_APP_PASSWORD)
-                        server.send_message(msg)
-                    st.success("Thank You! Feedback sent to developer.")
-                except Exception as e:
-                    st.error("Could not send email right now.")    
-#A show list for admin###########################                    
-def show_user_list():
-    st.subheader("Registered Users")
-    user_db = st.session_state.user_db
-    total_users = len(user_db)
-    st.write(f"Total registered users: {total_users}")
-    st.write("User List:")
-    for username in user_db.keys():
-        st.write(f"- {username}")           
+                feedback_entry = {
+                    "user": st.session_state.current_user,
+                    "email": user_email,
+                    "text": feedback_text,
+                    "time": datetime.datetime.now().isoformat(),
+                }
+                st.session_state.feedback_list.append(feedback_entry)    
+                st.success("Thank You! Feedback sent to successfully.")
+                          
+       
 #####Main app ui#################################################333                        
 def main_app_ui():
     check_inactivity()
     inject_login_styles()
     st.sidebar.markdown(f"###Welcome: **{st.session_state.current_user}**!")
-    st.sidebar.markdown("Finalizer - Free Beta")
+    st.sidebar.markdown("Balance sheet analyzer - Free Beta")
     privacy_and_data_control_ui()
     delete_account_ui()
     feedback_sidebar_ui()
@@ -470,10 +442,10 @@ def main_app_ui():
     #Show user list only for admin######################################3
     if st.session_state.current_user == "demo_user":
         show_user_list()
-    st.title("Finalizer | SA Finance")
-    st.caption("An easy way to check if your balance sheet or income statement is healthy and follows south african tax rules.")
+    st.title("Finalizer | SA Balance sheet analyzer")
+    st.caption("Verify your balance sheet solvency, liquidity ratios, and accounting equality instantly.")
     #Agree checkbox bfore uploading###########33
-    agree = st.checkbox("I agree to upload and processing of my financial doc.")
+    agree = st.checkbox("I agree to upload and processing of my balance sheet doc.")
     if agree:
         if st.session_state.user_consent_time is None:
             st.session_state.user_consent_time = datetime.datetime.utcnow().isoformat()
@@ -482,14 +454,14 @@ def main_app_ui():
         st.stop()
         
     uploaded_files = st.file_uploader(
-        "Upload your financial document",
+        "Upload your balance sheet document",
         type=["csv", "xlsx", "xls"],
         accept_multiple_files=True,
         key="document_upload",
     )
     
     if uploaded_files:
-        st.markdown("### Uploaded Documents Analysis")
+        st.markdown("### Balance Sheet Analysis")
         for uploaded_file in uploaded_files:
             if uploaded_file.size > 10 * 1024 * 1024:
                 st.error(f"{uploaded_file.name} is too large. Max size is 10MB.")
@@ -498,42 +470,59 @@ def main_app_ui():
             
             with st.container():
                 st.markdown(f"### {uploaded_file.name}")
-                df = load_financial_file(file_bytes, uploaded_file.name)
+                df = load_balance_sheet_file(file_bytes, uploaded_file.name)
                               
                 if isinstance(df, str) and df.startswith("FILE_ERROR"):
                     st.error(df)
                     continue
                 if df.empty:
-                    st.warning("No readable text was found in this file.")
+                    st.warning("No readable data was found in this file.")
                     continue
                 
-                doc_type = detect_document_type_from_df(df)
-                st.session_state.doc_type = doc_type
-                st.markdown(f"**Detected Document Type:** {doc_type.replace('_', ' ').title()}")
                 
-                if doc_type == "unsupported":
-                    st.warning("Unsupported document type. Please upload only Balance Sheets or Income Statements.")
-                    continue
-                
-                financial_data = parse_dataframe_metrics(df, doc_type)
+                financial_data = parse_balance_sheet_metrics(df)
                 st.session_state.financial_data = financial_data
-                if len(df.columns) >= 6:
-                    cleaned_display_df = df.iloc[:, [0, 5]].copy()
-                else:
-                    cleaned_display_df = df.iloc[:, [0, min(1, len(df.columns)-1)]].copy()
-                cleaned_display_df.columns = ["Financial Line Item", "Amount (ZAR)"]
-                cleaned_display_df = cleaned_display_df.dropna(subset=["Amount (ZAR)"])
-               
-                st.markdown("### Itemized Statement Breakdown")
+                
+                df = df.dropna(how='all').dropna(axis=1, how='all').reset_index(drop=True)
+                text_col = df.columns[0]
+                
+                for col in df.columns[1:]:
+                    sample_vals = df[col].dropna().head(10)
+                    if any(isinstance(v, str) and len(str(v).strip()) > 3 for v in sample_vals):
+                        text_col = col
+                        break
+                amount_col = None
+                max_nums = -1
+                for col in df.columns:
+                    if col == text_col:
+                        continue
+                        
+                    num_count = sum(1 for v in df[col] if clean_number(v) is not None and clean_number(v) != 0.0)
+                    if num_count > max_nums:
+                        max_nums = num_count
+                        amount_col = col
+             
+                if amount_col is None:
+                    amount_col = df.columns[1] if len(df.columns) > 1 else df.columns[0]
+              
+                cleaned_display_df = df[[text_col, amount_col]].copy()   
+                cleaned_display_df.columns = ["Financial Line Item", "Amount (ZAR)"]  
+                cleaned_display_df["Amount (ZAR)"] = cleaned_display_df["Amount (ZAR)"].apply(clean_number)   
+                cleaned_display_df = cleaned_display_df.dropna(subset=["Financial Line Item"])
+                cleaned_display_df["Financial Line Item"] = cleaned_display_df["Financial Line Item"].astype(str).str.strip()
+                cleaned_display_df = cleaned_display_df[cleaned_display_df["Financial Line Item"] != "nan"]
+                cleaned_display_df["Amount (ZAR)"] = cleaned_display_df["Amount (ZAR)"].fillna(0.0)
+                
+                st.markdown("### Itemized Balance Sheet Breakdown")
                 st.dataframe(cleaned_display_df, use_container_width=True)
                
                 st.sidebar.markdown("---")
-                st.sidebar.markdown("### SA Financial Config")
-                total_revenue = st.sidebar.number_input("Annual Revenue / Turnover (ZAR)", value=float(financial_data.get('revenue', 2500000.0)), step=50000.0)
-                current_assets = st.sidebar.number_input("Current Assets (ZAR)", value=float(financial_data.get('current_assets', 500000.0)), step=10000.0)
-                current_liabilities = st.sidebar.number_input("Current Liabilities (ZAR)", value=float(financial_data.get('current_liabilities', 300000.0)), step=10000.0)
-                total_liabilities = st.sidebar.number_input("Total Liabilities (ZAR)", value=float(financial_data.get('liabilities', 600000.0)), step=10000.0)
-                total_equity = st.sidebar.number_input("Total Equity (ZAR)", value=float(financial_data.get('equity', 400000.0)), step=10000.0)
+                st.sidebar.markdown("### SA Balance Sheet Config")
+                total_assets = st.sidebar.number_input("Total Assets (ZAR)", value=float(financial_data.get('assets', 1000000.0)), step=50000.0)
+                current_assets = st.sidebar.number_input("Current Assets (ZAR)", value=float(financial_data.get('current_assets', 400000.0)), step=10000.0)
+                current_liabilities = st.sidebar.number_input("Current Liabilities (ZAR)", value=float(financial_data.get('current_liabilities', 200000.0)), step=10000.0)
+                total_liabilities = st.sidebar.number_input("Total Liabilities (ZAR)", value=float(financial_data.get('liabilities', 500000.0)), step=10000.0)
+                total_equity = st.sidebar.number_input("Total Equity (ZAR)", value=float(financial_data.get('equity', 500000.0)), step=10000.0)
                 
                 current_ratio = round(current_assets / current_liabilities, 2) if current_liabilities > 0 else 0.0
                 debt_to_equity = round(total_liabilities / total_equity, 2) if total_equity > 0 else 0.0
@@ -547,51 +536,35 @@ def main_app_ui():
                 elif debt_to_equity > 1.0:
                     score -= 20
                 health_score = max(score, 0)
-                
-                sars_checks = []
-                if total_revenue >= 2300000:
-                    sars_checks.append({
-                        "item": "Voluntary VAT Registration",
-                        "status": "Action Required",
-                        "detail": "Turnover meets or exceeds the R2.3M compulsory VAT threshold. Ensure registration with SARS."
-                    })
-                elif total_revenue >= 120000:
-                    sars_checks.append({
-                        "item": "Voluntary VAT Registration",
-                        "status": "Eligible",
-                        "detail": "Turnover qualifies for voluntary VAT registration (above R120,000)."
-                    })
-                else:
-                    sars_checks.append({
-                        "item": "Voluntary Threshold Status",
-                        "status": "Compliant",
-                        "detail": "Turnover is below compulsory VAT registration thresholds."
-                    })
+                sars_checks = [
+                    {
+                        "item": "Solvency & Capital Adequacy",
+                        "status": "Compliant" if total_assets >= total_liabilities else "Risk Detected",
+                        "detail": "Assets exceed liabilities ensuring positive net worth." if total_assets >= total_liabilities else "Technical insolvency warning."
+                    },
+                    {
+                        "item": "Liquidity Threshold (Current Ratio)",
+                        "status": "Optimal" if current_ratio >= 1.0 else "Sub_optimal",
+                        "detail": f"Current ratio stands at {current_ratio}."
+                    }
+                ]
                 st.markdown("---")
                 col1, col2, col3 = st.columns(3)
                 with col1:
-                    st.metric(label="Financial Health Score", value=f"{health_score}/100", delta="Healthy" if health_score >= 70 else "Needs Review")
+                    st.metric(label="Solviency & Health Score", value=f"{health_score}/100", delta="Healthy" if health_score >= 70 else "Needs Review")
                 with col2:
                     st.metric(label="Current Ratio (Liquidity)", value=current_ratio, delta="Optimal > 1.5" if current_ratio >= 1.5 else "Low Liquidity")
                 with col3:
                     st.metric(label="Debt-To-Equity", value=debt_to_equity, delta="Safe < 1.0" if debt_to_equity <= 1.0 else "High Leverage")
-                st.markdown("### SARS Tax & Compliance Checks")
-                for check in sars_checks:
-                    if "Action Required" in check["status"]:
-                        st.error(f"**{check['item']}** ({check['status']}): {check['detail']}")
-                    elif "Eligible" in check["status"]:
-                        st.warning(f"**{check['item']}** ({check['status']}): {check['detail']}")
+                
+                st.markdown("### Accounting Equation Varification")
+                for note in financial_data.get("validation_notes", []):
+                    if "Mismatch" in note:
+                  
+                        st.error(note)
                     else:
-                        st.success(f"**{check['item']}** ({check['status']}): {check['detail']}")
-                st.markdown("### MULTY-PERIOD Trend Simulation")
-                with st.expander("Compare with Previous Period"):
-                    prev_revenue = st.number_input("Previous Period Revenue (ZAR)", value=float(total_revenue * 0.9), step=50000.0)
-                    if prev_revenue > 0:
-                        growth_pct = round(((total_revenue - prev_revenue) / prev_revenue) * 100, 2)
-                        st.metric("Revenue Growth Year-over-Year", f"{growth_pct}%", delta="Growing" if growth_pct > 0 else "Declining")
-                    else:
-                        st.info("Enter previous period metrics to compute variance.")
-                summary_text = generate_summary(financial_data, doc_type)
+                        st.success(note)
+                summary_text = generate_summary(financial_data)
                 st.info(summary_text)
                 
                 st.markdown("---")
@@ -618,23 +591,23 @@ def main_app_ui():
                     <div class="card">
                         <h3>Core Ratios</h3>
                         <p><b>Current Ratio:</b> {current_ratio}</p>
-                        <p><b>Debt-to-Equity Ratio:</b> {current_ratio}</p>
+                        <p><b>Debt-to-Equity Ratio:</b> {debt_to_equity}</p>
                     </div>
                     <div class="card">
                         <h3>SARS Compliance Status</h3>
                         <p><b>{sars_checks[0]['item']}:</b> {sars_checks[0]['status']} - {sars_checks[0]['detail']}</p>
                     </div>
                     <div class="card">
-                        <h3>Itemized Statement</h3>
+                        <h3>Balance Sheet Breakdown</h3>
                         {table_html}
                     </div>
                 </body>
                 </html>
                 """
                 st.download_button(
-                    label=f"Download Branded Report for {uploaded_file.name} (HTML)",
+                    label=f"Download Balance Sheet Report for {uploaded_file.name} (HTML)",
                     data=html_report,
-                    file_name=f"Finalizer_Report_{uploaded_file.name}.html",
+                    file_name=f"Balance_Report_{uploaded_file.name}.html",
                     mime="text/html",
                 )
                 st.markdown("---")
