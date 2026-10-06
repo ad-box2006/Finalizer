@@ -14,6 +14,7 @@ import time
 import bcrypt
 import base64
 import threading
+from datetime import datetime, timezone
 
 logging.basicConfig(level=logging.INFO)
 def inject_login_styles():
@@ -452,7 +453,7 @@ def main_app_ui():
     agree = st.checkbox("I agree to upload and processing of my balance sheet doc.")
     if agree:
         if st.session_state.user_consent_time is None:
-            st.session_state.user_consent_time = datetime.datetime.utcnow().isoformat()
+            st.session_state.user_consent_time = datetime.now(timezone.utc).isoformat()
     else:
         st.warning("You must agree to proceed.")
         st.stop()
