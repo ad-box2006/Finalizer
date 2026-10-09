@@ -1,7 +1,7 @@
 
 openpyxl
 streamlit
-
+fpdf
 
 numpy
 pandas

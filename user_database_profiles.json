@@ -68,5 +68,11 @@
     },
     "grain": {
         "hash": "JDJiJDEyJE1ESFM5VnU2ang3UnBEVEVJNDN1Sk9zYm9tdWEwRjVDSmN1Qk9BRGlIMHpwc0Q5VWRaSFNl"
+    },
+    "bando": {
+        "hash": "JDJiJDEyJFZmMWVtYTBQRWFkWnF3eHFDVi4uV2UzNUd4TUNCVG8zd2ZvcEhHbmg0MnhNVVlCN1NldFNT"
+    },
+    "africa": {
+        "hash": "JDJiJDEyJEFKc0oyZzN6aEg1Y0tXUkFHNGhHYWV5UW9YMUhONFBVajZjYUhSLnBZZ1dySHg0T0lLWWlL"
     }
 }
