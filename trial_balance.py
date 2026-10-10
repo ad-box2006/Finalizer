@@ -18,6 +18,7 @@ def load_trial_balance_file(file_bytes, file_name):
         return df_raw, sheet_name
     except Exception as e:
         return None, str(e)
+    
 #Clean numbers: Removes currency symbols, commas, and handles negative values in brackets (e.g., "(1,000)" -> -1000.0)
 def clean_number(value_str):
     if pd.isna(value_str):

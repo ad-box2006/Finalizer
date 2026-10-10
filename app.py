@@ -14,6 +14,7 @@ import datetime
 import time
 import bcrypt
 import base64
+import requests
 import threading
 from datetime import datetime, timezone
 
@@ -292,32 +293,37 @@ def delete_account_ui():
             if st.button("Cancel"):
                 st.session_state.confirm_delete = False
                 st.rerun()
+                
 def feedback_sidebar_ui():
     st.sidebar.markdown("---")
-    st.sidebar.markdown("Beta Feedback")
+    st.sidebar.markdown("Beta Feedback & Leads")
     with st.sidebar.form("feedback_form", clear_on_submit=True):
-        user_email = st.text_input("Your Email (optional):")
-        feedback_text = st.text_area("Thoughts or bug reports?")
+        user_email = st.text_input("Your Email (for beta updates):", placeholder="accountant@firm.co.za")
+        feedback_text = st.text_area("Thoughts, feature request, or bug reports?", placeholder="What would make month-end faster for you?")
         submitted = st.form_submit_button("Send Feedback")
         if submitted:
-            if not feedback_text.strip():
-                st.warning("Please enter some feedback first.")
+            if not feedback_text.strip() and not user_email.strip():
+                st.warning("Please enter your email or feedback first.")
             else:
-                feedback_data = {
-                    "Timestamp": [datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")],
-                    "User": [str(st.session_state.current_user)],
-                    "Email": [user_email if user_email else "Anonymous"],
-                    "Comment": [feedback_text]
-                    
+                formspree_url = "https://formspree.io/f/xzedgjev"
+                valid_email = user_email if user_email and "@" in user_email else "beta_user@finalizer.co.za"
+                payload = {
+                    "user": str(st.session_state.current_user),
+                    "email": valid_email,
+                    "original_input_email": user_email if user_email else "None providedj",
+                    "comment": feedback_text   
                 }
-                df_feedback = pd.DataFrame(feedback_data)
-                csv_file = "feedback_csv"
-                if os.path.exists(csv_file):
-                    df_feedback.to_csv(csv_file, mode='a', header=False, index=False)
-                else:
-                    df_feedback.to_csv(csv_file, mode='w', header=True, index=False)
+                headers = {"Accept": "application/json"}
+                try:
+                    response = requests.post(formspree_url, data=payload, headers=headers, timeout=100)
+                    if response.status_code == 200:
+                        st.success("Thank You! Feedback sent successfully.")
+                    else:
+                        st.error(f"Formspree error ({response.status_code}): {response.text}")
+                except Exception as e:
+                    st.error(f"Detailed error: {e}")
+                    logging.error(f"Email dispatch error: {e}", exc_info=True)
                     
-                st.success("Thank You! Feedback sent to successfully.")
                           
        
 #####Main app ui#################################################333                        
