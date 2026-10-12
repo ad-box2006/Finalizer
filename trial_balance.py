@@ -42,11 +42,11 @@ def validate_trial_balance_structure(df):
         return False, " **Document Type Mismatch:** This appears to be a Balance sheet, but you are in the Trial Balance section. Please switch to the Balance Sheet section."
     return True, ""    
 # PDF Generation Function
-def generate_pdf_report(total_debits, total_credits, difference, is_balanced, summary_df):
+def generate_pdf_report(total_debits, total_credits, difference, is_balanced, firm_name, summary_df, preparer_name, client_name, entity_type):
     pdf = FPDF()
     pdf.add_page()
     pdf.set_font("Arial", "B", 16)
-    pdf.cell(0, 10, "Trial Balance Audit Report", ln=True, align="center")
+    pdf.cell(0, 10, "Trial Balance Audit Report (Adjusted)", ln=True, align="center")
     
     pdf.set_font("Arial", "I", 10)
     pdf.cell(0, 6, f"Prepared by: {firm_name} | Accountant: {preparer_name}", ln=True, align="center")
@@ -56,10 +56,10 @@ def generate_pdf_report(total_debits, total_credits, difference, is_balanced, su
     pdf.ln(8)
     # Validation Section Summary
     pdf.set_font("Arial", "B", 12)
-    pdf.cell(0, 8, "Executive Summary & Validation", ln=True)
+    pdf.cell(0, 8, "Executive Summary & Adjusted Validation", ln=True)
     pdf.set_font("Arial", "", 11)
-    pdf.cell(0, 6, f"Total Debits: R {total_debits:,.2f}", ln=True)
-    pdf.cell(0, 6, f"Total Credits: R {total_credits:,.2f}", ln=True)
+    pdf.cell(0, 6, f"Adjusted Total Debits: R {total_debits:,.2f}", ln=True)
+    pdf.cell(0, 6, f"Adjusted Total Credits: R {total_credits:,.2f}", ln=True)
     pdf.cell(0, 6, f"Difference: R {difference:,.2f}", ln=True)
     status_text = "Status: Balanced (Verified)" if is_balanced else "Status: Out of Balance"
     pdf.cell(0, 6, status_text, ln=True)
@@ -67,19 +67,19 @@ def generate_pdf_report(total_debits, total_credits, difference, is_balanced, su
     # Account Summary Table Header
     if summary_df is not None:
         pdf.set_font("Arial", "B", 12)
-        pdf.cell(0, 8, "Account Summary Breakdown", ln=True)
+        pdf.cell(0, 8, "Adjusted Account Summary Breakdown", ln=True)
         pdf.set_font("Arial", "B", 10)
         pdf.cell(80, 8, "Account Name", 1)
-        pdf.cell(35, 8, "Total Debit", 1)
-        pdf.cell(35, 8, "Total Credit", 1)
+        pdf.cell(35, 8, "Adjusted Debit", 1)
+        pdf.cell(35, 8, "Adjusted Credit", 1)
         pdf.cell(40, 8, "Net Balance", 1)
         pdf.ln()
         
         pdf.set_font("Arial", "", 9)
         for _, row in summary_df.iterrows():
             account_name = str(row.iloc[0])[:35]  # truncate long names
-            t_debit = f"{row['Total Debit']:,.2f}"
-            t_credit = f"{row['Total Credit']:,.2f}"
+            t_debit = f"{row['Adjusted Debit']:,.2f}"
+            t_credit = f"{row['Adjusted Credit']:,.2f}"
             net_bal = f"{row['Net Balance']:,.2f}"
             
             pdf.cell(80, 6, account_name, 1)
@@ -141,23 +141,52 @@ def trial_balance_ui():
             st.error(f"Failed to parse file structure: {e}")
             return
         df.columns = df.columns.astype(str).str.strip()
-        #Detect the debit, credit and account description columns automatically
-        debit_col = None
-        credit_col = None
-        account_col = None
-        for col in df.columns:
-            col_lower = str(col).lower()
-            if ("debit" in col_lower or col_lower == "dr") and not debit_col:
-                debit_col = col
-            elif ("credit" in col_lower or col_lower == "cr") and not credit_col:
-                credit_col = col
-            elif ("account" in col_lower or "description" in col_lower or "name" in col_lower) and not account_col:
-                account_col = col
+        # Detect relevant columns including adjustments and adjusted balances
+        def detect_cols(df):
+            cols = {str(col).lower().strip(): col for col in df.columns}
+            def find_col(target_names):
+                for name in target_names:
+                    if name in cols:
+                        return cols[name]
+                for name in target_names:
+                    for c in cols:
+                        if name in c:
+                            return cols[c]
+                return None
+            return {
+                "account": find_col(["account name", "description", "name"]),
+                "unadj_debit": find_col(["unadjusted debit"]),
+                "unadj_credit": find_col(["unadjusted credit"]),
                 
-        if debit_col is None or credit_col is None:
-            st.error("Could not find 'Debit' or 'Credit' columns. Detected columns: {list(df.columns)}")
-            return
-        #Clean up account rows by removing empty rows or table rows
+                "adj_debit": find_col(["adjustments debit", "adj debit"]),
+                "adj_credit": find_col(["adjustments credit", "adj credit"]),
+                
+                "adj_bal_debit": find_col(["adjusted debit"]),
+                "adj_bal_credit": find_col(["adjusted credit"]),
+            }
+                
+        cols = detect_cols(df)
+                
+        def clean_col(col):
+            return df[col].apply(clean_number) if col else pd.Series([0]*len(df))
+                
+        df["Unadj_Debit"] = clean_col(cols["unadj_debit"])
+        df["Unadj_Credit"] = clean_col(cols["unadj_credit"])
+        df["Adj_Debit"] = clean_col(cols["adj_debit"])
+        df["Adj_Credit"] = clean_col(cols["adj_credit"])
+        df["AdjBal_Debit"] = clean_col(cols["adj_bal_debit"])
+        df["AdjBal_Credit"] = clean_col(cols["adj_bal_credit"])
+                
+                # Use adjusted balances if available, else calculate from unadjusted + adjustments
+        if cols["adj_bal_debit"] and cols["adj_bal_credit"]:
+            df["Adjusted_Debit"] = df["AdjBal_Debit"]
+            df["Adjusted_Credit"] = df["AdjBal_Credit"]
+        else:
+            df["Adjusted_Debit"] = df["Unadj_Debit"] + df["Adj_Debit"]
+            df["Adjusted_Credit"] = df["Unadj_Credit"] + df["Adj_Credit"]
+       
+        account_col = cols["account"]
+                # Filter out invalid accounts
         if account_col:
             df = df[df[account_col].notna()].copy()
             exclude_keywords = ["total", "status", "tip", "difference"]
@@ -165,98 +194,91 @@ def trial_balance_ui():
                 val_str = str(val).lower()
                 return not any(kw in val_str for kw in exclude_keywords)
             df = df[df[account_col].apply(is_valid_account)]
-    #Clean and convert the debit and credit numbers into proper decimals
-    df["Debit_Clean"] = df [debit_col].apply(clean_number)
-    df["Credit_Clean"] = df [credit_col].apply(clean_number)
-    #Check any unusual data entries (negative numbers, zeros, or duplicates)
-    neg_debits = df[df["Debit_Clean"] < 0]
-    neg_credits = df[df["Credit_Clean"] < 0]
-    zero_balances = df[(df["Debit_Clean"] == 0) & (df["Credit_Clean"] == 0)]
-    duplicate_accounts = None
-    if account_col:
-        duplicate_accounts = df[df.duplicated(subset=[account_col], keep=False)]
-    #Check if the trial balance balances    
-    total_debits = df["Debit_Clean"].sum()
-    total_credits = df["Credit_Clean"].sum()
-    difference = total_debits - total_credits
-    debit_credit_ratio = (total_debits / total_credits) if total_credits > 0 else 0.0
-    is_balanced = abs(difference) < 0.01
-    #group accounts together for the summary table breakdown
-    if account_col:
-        df["Net_Balance"] = df["Debit_Clean"] - df["Credit_Clean"]
-        summary_df = df.groupby(account_col).agg({
-            "Debit_Clean": "sum",
-            "Credit_Clean": "sum",
-            "Net_Balance": "sum"
-        }).reset_index()
-        summary_df.columns = [account_col, "Total Debit", "Total Credit", "Net Balance"]
-        summary_df["% of Total Debits"] = (summary_df["Total Debit"] / total_debits * 100).fillna(0)
-        summary_df["% of Total Credits"] = (summary_df["Total Credit"] / total_credits * 100).fillna(0)
-    else:
-        summary_df = None
-    #display raw data table inside an expander box    
-    with st.expander("Raw Trial Balance Data"):
-        st.dataframe(df)
-    #display summary  by account with color highlighting for large amounts    
-    with st.expander("Summary by Account"):
-        if summary_df is not None:
-            def highlight_large_values(val):
-                color = ''
-                if isinstance(val, (int, float)):
-                    if abs(val) > 100000:
-                        color = 'background-color: #ffcccc'
-                return color
-            st.dataframe(summary_df.style.map(highlight_large_values))
-        else:
-            st.info("No account/description column found for summary.")
-    #display validation checks(warnings, totals, and balance status)        
-    with st.expander("Validation"):
-        if not neg_debits.empty:
-            st.warning(f"Found {len(neg_debits)} debit entries with negative values.")
-        if not neg_credits.empty:
-            st.warning(f"Found {len(neg_credits)} credit entries with negative values.")
-        if not zero_balances.empty:
-            st.warning(f"Found {len(zero_balances)} entries with zero debit and credit.")
-        if duplicate_accounts is not None and not duplicate_accounts.empty:
-            st.warning(f"Found {len(duplicate_accounts)} duplicate_accounts entries.")
+                # Check unusual data entries
+        neg_debits = df[df["Adjusted_Debit"] < 0]
+        neg_credits = df[df["Adjusted_Credit"] < 0]
+        zero_balances = df[(df["Adjusted_Debit"] == 0) & (df["Adjusted_Credit"] == 0)]
+        duplicate_accounts = df[df.duplicated(subset=[account_col], keep=False)] if account_col else None
+                
+                # Totals and validation
+        total_debits = df["Adjusted_Debit"].sum()
+        total_credits = df["Adjusted_Credit"].sum()
+        difference = total_debits - total_credits
+        debit_credit_ratio = (total_debits / total_credits) if total_credits > 0 else 0.0
+        is_balanced = abs(difference) < 0.01
+                #group accounts together for the summary table breakdown
+        if account_col:
+            df["Net_Balance"] = df["Adjusted_Debit"] - df["Adjusted_Credit"]
+            summary_df = df.groupby(account_col).agg({
+                "Adjusted_Debit": "sum",
+                "Adjusted_Credit": "sum",
+                "Net_Balance": "sum"
+            }).reset_index()
+            summary_df.columns = [account_col, "Adjusted Debit", "Adjusted Credit", "Net Balance"]
             
-        st.markdown(f"**Total Debits:** R{total_debits:,.2f}")
-        st.markdown(f"**Total Credits:** R{total_credits:,.2f}")
-        st.markdown(f"**Debit-to-Credit Ratio:** {debit_credit_ratio:,.3f}")
-        if abs(difference) < 0.01:
-            st.success("Trial Balance is balanced.")
         else:
-            st.error(f"Trial Balance is not balanced. Difference: R{difference:,.2f}")
+            summary_df = None
+                #display raw data table inside an expander box    
+        with st.expander("Raw Trial Balance Data (Parsed)"):
+            st.dataframe(df)
+                #display summary  by account with color highlighting for large amounts    
+        with st.expander("Adjusted Summary by Account"):
+            if summary_df is not None:
+                def highlight_large_values(val):
+                    color = ''
+                    if isinstance(val, (int, float)) and abs(val) > 100000:
+                      
+                        return 'background-color: #ffcccc'
+                    return ''
+                st.dataframe(summary_df.style.map(highlight_large_values))
+            else:
+                st.info("No account/description column found for summary.")
+                #display validation checks(warnings, totals, and balance status)        
+        with st.expander("Validation Adjustments Audits"):
+            if not neg_debits.empty:
+                st.warning(f"Found {len(neg_debits)} adjusted debit entries with negative values.")
+            if not neg_credits.empty:
+                st.warning(f"Found {len(neg_credits)} adjusted credit entries with negative values.")
+            if not zero_balances.empty:
+                st.warning(f"Found {len(zero_balances)} adjusted entries with zero debit and credit.")
+            
+            st.markdown(f"**Adjusted Total Debits:** R{total_debits:,.2f}")
+            st.markdown(f"**Adjusted Total Credits:** R{total_credits:,.2f}")
+            st.markdown(f"**Debit-to-Credit Ratio:** {debit_credit_ratio:,.3f}")
+            if is_balanced:
+                st.success("Adjusted Trial Balance is balanced.")
+            else:
+                st.error(f"Adjusted Trial Balance is not balanced. Difference: R{difference:,.2f}")
     
-    #prepare data for downloading cleaned files
-    if account_col:
-        to_download = df[[account_col, "Debit_Clean", "Credit_Clean"]].copy()
-        to_download.columns = ["Account", "Debit", "Credit"]
-    else:
-        to_download = df[["Debit_Clean", "Credit_Clean"]].copy()
-        to_download.columns = ["Debit", "Credit"]
+                # prepare data for downloading cleaned files
+        if account_col:
+            to_download = df[[account_col, "Adjusted_Debit", "Adjusted_Credit"]].copy()
+            to_download.columns = ["Account", "Adjusted_Debit", "Adjusted_Credit"]
+        else:
+            to_download = df[["Adjusted_Debit", "Adjusted_Credit"]].copy()
+            to_download.columns = ["Adjusted_Debit", "Adjusted_Credit"]
         
-    output = io.BytesIO()
-    with pd.ExcelWriter(output, engine='openpyxl') as writer:
-        to_download.to_excel(writer, index=False, sheet_name="Cleaned Trial Balance")
-    excel_data = output.getvalue()
-    #download buttons for both excel and pdf audit report
-    col1, col2 = st.columns(2)
-    with col1:
-        st.download_button(
-            label="Download Cleaned Trial Balance (Excel)",
-            data=excel_data,
-            file_name="cleaned_trial_balance.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-        )
-    with col2:
-        pdf_bytes = generate_pdf_report(total_debits, total_credits, difference, is_balanced, summary_df)
-        st.download_button(
-            label="Download PDF Audit Report",
-            data=pdf_bytes,
-            file_name="audit_report.pdf",
-            mime="application/pdf"
-        )
+        output = io.BytesIO()
+        with pd.ExcelWriter(output, engine='openpyxl') as writer:
+            to_download.to_excel(writer, index=False, sheet_name="Cleaned Trial Balance")
+        excel_data = output.getvalue()
+                 #download buttons for both excel and pdf audit report
+        col1, col2 = st.columns(2)
+        with col1:
+            st.download_button(
+                label="Download Cleaned Trial Balance (Excel)",
+                data=excel_data,
+                file_name="cleaned_trial_balance.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            )
+        with col2:
+            pdf_bytes = generate_pdf_report(total_debits, total_credits, difference, is_balanced, firm_name, summary_df, preparer_name, client_name, entity_type)
+            st.download_button(
+                label="Download PDF Audit Report",
+                data=pdf_bytes,
+                file_name="audit_report.pdf",
+                mime="application/pdf"
+            )
 
 if __name__ == "__main__":
     trial_balance_ui()
