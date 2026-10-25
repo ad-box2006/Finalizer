@@ -112,10 +112,13 @@ def trial_balance_ui():
     with st.spinner("Processing file..."):
         try:
             file_bytes = uploaded_file.read()
-            df_raw, sheetname = load_trial_balance_file(file_bytes, uploaded_file.name)
-            if df_raw is None:
-                st.error(f"Failed to read file: {sheet_name}")
-            return
+            if uploaded_file.name.lower().endswith(".csv"):
+                df_raw, sheetname = load_trial_balance_file(file_bytes, uploaded_file.name)
+            else:
+                xls = pd.ExcelFile(BytesIO(file_bytes))
+                sheet_name = xls.sheet_names[0]
+                df_raw = pd.read_excel(BytesIO(file_bytes), sheet_name=sheet_name, header=None)
+           
                 
         except Exception as e:
             st.error(f"Failed to read file: {e}")
