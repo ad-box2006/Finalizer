@@ -25,25 +25,30 @@ def inject_styles():
             border-right: 1px solid #1f2a44 !important;
         }
         .title {
-            color: white !important;
-            font-style: italic;
+            font-size: 2.1rem;
+            font-weight: 800;
+            letter-spacing: -0.04rem;
+            margin: 0 0 0.2rem 0;
+            color: #ffffff !important;   
         }
         .subtitle {
-            color: white !important;
-            size: 20%;
+            color: #a7b4c7 !important;
+            font-size: 0,98rem;
+            margin: 0 0 1.6rem;
         }
         section[data-testid="stSidebar"] * { color: #e5eef8 !important; }
         
-        .stButton > button {
+        .stButton > button, div.stFormSubmitButton > button, button[kind="primary"], button[kind="secondary"] {
             border-radius: 10px;
             border: 1px solid #24324f !important;
             background: #172033 !important;
             color: #e5eef8 !important;;
             width: 100%;
         }
-        .stButton > button:hover {
+        .stButton > button:hover, div.stFormSubmitButton > button:hover {
             background: #22314f;
             border-color: #35507a;
+            color: #ffffff;
         }
         div[data-testid="stSidebar"] .stButton > button {
             background: #111827;
@@ -110,7 +115,7 @@ def feedback_sidebar_ui():
                 }
                 headers = {"Accept": "application/json"}
                 try:
-                    response = requests.post(formspree_url, data=payload, headers=headers, timeout=100)
+                    response = requests.post(formspree_url, data=payload, headers=headers, timeout=8)
                     if response.status_code == 200:
                         st.success("Thank You! Feedback sent successfully.")
                     else:
