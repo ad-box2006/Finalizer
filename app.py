@@ -15,7 +15,7 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 st.markdown(
-    '<meta name="google-site-verification" content="_465Xfo_QGk42sSNs-HOJFz0LXM2Dh7FM0LWOm0E058" />'
+    '<meta name="google-site-verification" content="_465Xfo_QGk42sSNs-HOJFz0LXM2Dh7FM0LWOm0E058" />',
     unsafe_allow_html=True
 )
 def inject_styles():
