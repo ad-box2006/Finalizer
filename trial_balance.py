@@ -28,7 +28,7 @@ def clean_number(value_str):
     
     value_str = str(value_str).strip()
     
-    if value_str.startswith("(") and value_str.endswith("("):
+    if value_str.startswith("(") and value_str.endswith(")"):
         value_str = "-" + value_str[1:-1]
     value_str = re.sub(r"[,\s$R]", "", value_str)
     try:
@@ -106,19 +106,21 @@ def trial_balance_ui():
     if not uploaded_file:
         st.info("Please upload a trial balance file (CSV or Excel).")
         return
-    
+    if uploaded_file.size > 10 * 1024 * 1024:
+        st.error("file exceeds 10mb limit. Please upload a smaller document.")
+        return
     with st.spinner("Processing file..."):
         try:
-            if uploaded_file.name.lower().endswith(".csv"):
-                df_raw = pd.read_csv(BytesIO(file_bytes), header=None)
-                sheet_name = None
-            else:
-                xls = pd.ExcelFile(BytesIO(file_bytes))
-                sheet_name = xls.sheet_names[0]
-                df_raw = pd.read_excel(BytesIO(file_bytes), sheet_name=sheet_name, header=None)
+            file_bytes = uploaded_file.read()
+            df_raw, sheetname = load_trial_balance_file(file_bytes, uploaded_file.name)
+            if df_raw is None:
+                st.error(f"Failed to read file: {sheet_name}")
+            return
+                
         except Exception as e:
             st.error(f"Failed to read file: {e}")
             return
+        
         if df_raw.empty:
             st.markdown("Uploaded file is empty.")
             return
@@ -135,10 +137,10 @@ def trial_balance_ui():
                 header_row_idx = idx
                 break
         try:
-            if uploaded_file.name.endswith(".csv"):
-                df = pd.read_csv(uploaded_file, skiprows=header_row_idx)
+            if uploaded_file.name.lower().endswith(".csv"):
+                df = pd.read_csv(BytesIO(file_bytes), skiprows=header_row_idx)
             else:
-                df = pd.read_excel(uploaded_file, sheet_name=sheet_name, skiprows=header_row_idx)
+                df = pd.read_excel(BytesIO(file_bytes), sheet_name=sheet_name, skiprows=header_row_idx)
         except Exception as e:
             st.error(f"Failed to parse file structure: {e}")
             return

@@ -311,24 +311,26 @@ def balance_sheet_ui():
                 excel_data = output.getvalue()
                 with col_dl1:
                     st.download_button(
-                    label=f"Download Cleaned Balance Sheet (Excel)",
-                    data=excel_data,
-                    file_name=f"{client_name.replace(' ', '-')}_cleaned_balance_sheet.xlsx",
-                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                )
+                        label=f"Download Cleaned Balance Sheet (Excel)",
+                        data=excel_data,
+                        file_name=f"{client_name.replace(' ', '-')}_cleaned_balance_sheet.xlsx",
+                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    )
                 financial_data["assets"] = total_assets
                 financial_data["liabilities"] = total_liabilities
                 financial_data["equity"] = total_equity
                 pdf_bytes = generate_balance_sheet_pdf(financial_data, health_score, current_ratio, debt_to_equity, cleaned_display_df, firm_name, client_name, entity_type, preparer_name)
-                st.download_button(
-                    label=f"Download PDF Financial Report",
-                    data=pdf_bytes,
-                    file_name=f"{client_name.replace(' ', '-')}_balance_sheet_report.pdf",
-                    mime="application/pdf",
-                )
+                with col_dl2:
+                    st.download_button(
+                        label=f"Download PDF Financial Report",
+                        data=pdf_bytes,
+                        file_name=f"{client_name.replace(' ', '-')}_balance_sheet_report.pdf",
+                        mime="application/pdf",
+                    )
                 st.markdown("---")
     else:
         st.info("Upload your financial document to begin analysis.")
     
-
+if __name__ == "__main__":
+    balance_sheet_ui()
  

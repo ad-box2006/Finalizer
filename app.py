@@ -133,14 +133,7 @@ def main_app_ui():
     st.markdown('<div class="subtitle">Quick document analysis</div>', unsafe_allow_html=True)
     st.sidebar.markdown("### Upload Type")
     upload_type = st.sidebar.radio("Select document type", ["Balance Sheet", "Trial Balance"])
-    #Agree checkbox bfore uploading###########33
-    agree = st.checkbox("I agree to the upload and processing of my financial document (ZAR).")
-    if agree:
-        if st.session_state.get("user_consent_time") is None:
-            st.session_state.user_consent_time = datetime.now(timezone.utc).isoformat()
-    else:
-        st.warning("You must agree to proceed.")
-        st.stop()
+    
     st.markdown("---")
     
     if upload_type == "Trial Balance":
