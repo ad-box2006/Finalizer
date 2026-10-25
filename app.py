@@ -14,10 +14,21 @@ st.set_page_config(
     layout="centered",
     initial_sidebar_state="expanded"
 )
-st.markdown(
-    '<meta name="google-site-verification" content="_465Xfo_QGk42sSNs-HOJFz0LXM2Dh7FM0LWOm0E058" />',
-    unsafe_allow_html=True
-)
+def inject_google_tag():
+    try:
+        import streamlit as st_pkg
+        index_path = os.path.join(os.path.dirname(st_pkg.__file__), "static", "index.html")
+        if os.path.exists(index_path):
+            with open(index_path, "r", encoding="utf-8") as f:
+                html = f.read()
+            tag = '<meta name="google-site-verification" content="_465Xfo_QGk42sSNs-HOJFz0LXM2Dh7FM0LWOm0E058" />'
+            if tag not in html:
+                with open(index_path, "w", encoding="utf-8") as f:
+                    f.write(html.replace("</head>", f" {tag}\n</head>"))
+    except Exception:
+        pass
+
+inject_google_tag()
 def inject_styles():
     st.markdown("""
         <style>
