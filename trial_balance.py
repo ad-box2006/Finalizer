@@ -1,6 +1,7 @@
 import streamlit as st
 from io import BytesIO
 import pandas as pd
+import logging
 from fpdf import FPDF
 import re
 import io
