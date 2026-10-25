@@ -2,7 +2,6 @@
 openpyxl
 streamlit
 fpdf
-
 numpy
 pandas
-bcrypt
+requests

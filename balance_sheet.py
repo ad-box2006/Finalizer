@@ -3,6 +3,7 @@ import streamlit as st
 from io import BytesIO
 import pandas as pd
 import re
+import logging
 import io
 import datetime
 from fpdf import FPDF
@@ -15,7 +16,7 @@ def clean_number(value_str):
     if isinstance(value_str, (int, float)):
         return float(value_str)
     value_str = str(value_str).strip()
-    if value_str.startswith("(") and value_str.endswith("("):
+    if value_str.startswith("(") and value_str.endswith(")"):
         value_str = "-" + value_str[1:-1]
     value_str = re.sub(r"[R,\s€£$]", "", value_str)
     try:
@@ -30,7 +31,7 @@ def validate_balance_sheet_structure(df):
     for marker in trial_balance_markers:
         if marker in text_content:
             return False, " **Document Type Mismatch:** This appears to be a Trial Balance sheet, but you are in the Balance Sheet section. Please switch tabs or upload a valid Balance Sheet."
-        return True, ""
+    return True, ""
 #File loader: Reads csv or excel files    
 @st.cache_data(show_spinner=False)
 def load_balance_sheet_file(file_bytes, file_name):
@@ -72,7 +73,7 @@ def parse_balance_sheet_metrics(df):
         "current_assets": ["total current assets"],
         "non-current assets": ["total fixed assets", "total non-current assets", "non-current assets"],
         "cash": ["cash and cash equivalents", "cash"],
-        "liabilities": ["total liabilities", "liabilities"],
+        "liabilities": ["total liabilities"],
         "current_liabilities": ["total current liabilities", "current liabilities"],
         "equity": ["total equity"]
     }   
@@ -85,7 +86,9 @@ def parse_balance_sheet_metrics(df):
             if not row_vals:
                 continue
             row_str = " ".join(row_vals)
-            matched = any(kw in row_str for kw in kw_list)
+            if key == "liabilities" and "and equity" in row_str:
+                continue
+            matched = any(kw == row_str or kw in row_str for kw in kw_list)
             if matched:
                 for val in row.values:
                     num = clean_number(val)
@@ -313,6 +316,9 @@ def balance_sheet_ui():
                     file_name=f"{client_name.replace(' ', '-')}_cleaned_balance_sheet.xlsx",
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                 )
+                financial_data["assets"] = total_assets
+                financial_data["liabilities"] = total_liabilities
+                financial_data["equity"] = total_equity
                 pdf_bytes = generate_balance_sheet_pdf(financial_data, health_score, current_ratio, debt_to_equity, cleaned_display_df, firm_name, client_name, entity_type, preparer_name)
                 st.download_button(
                     label=f"Download PDF Financial Report",

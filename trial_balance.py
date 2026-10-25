@@ -8,7 +8,7 @@ import io
 @st.cache_data(show_spinner=False)
 def load_trial_balance_file(file_bytes, file_name):
     try:
-        if file_name.endswith('.csv'):
+        if file_name.lower().endswith('.csv'):
             df_raw = pd.read_csv(BytesIO(file_bytes), header=None)
             sheet_name = None
         else:
@@ -25,13 +25,15 @@ def clean_number(value_str):
         return 0.0
     if isinstance(value_str, (int, float)):
         return float(value_str)
+    
     value_str = str(value_str).strip()
+    
     if value_str.startswith("(") and value_str.endswith("("):
         value_str = "-" + value_str[1:-1]
-    value_str = re.sub(r"[,\s]", "", value_str)
+    value_str = re.sub(r"[,\s$R]", "", value_str)
     try:
         return float(value_str)
-    except:
+    except Exception:
         return 0.0
 #Guard Check: catches if someone mistakenly uploads a balance sheet file instead of a trial balance
 def validate_trial_balance_structure(df):
@@ -107,13 +109,13 @@ def trial_balance_ui():
     
     with st.spinner("Processing file..."):
         try:
-            if uploaded_file.name.endswith(".csv"):
-                df = pd.read_csv(uploaded_file, header=None)
+            if uploaded_file.name.lower().endswith(".csv"):
+                df_raw = pd.read_csv(BytesIO(file_bytes), header=None)
                 sheet_name = None
             else:
-                xls = pd.ExcelFile(uploaded_file)
+                xls = pd.ExcelFile(BytesIO(file_bytes))
                 sheet_name = xls.sheet_names[0]
-                df_raw = pd.read_excel(uploaded_file, sheet_name=sheet_name, header=None)
+                df_raw = pd.read_excel(BytesIO(file_bytes), sheet_name=sheet_name, header=None)
         except Exception as e:
             st.error(f"Failed to read file: {e}")
             return
@@ -220,7 +222,7 @@ def trial_balance_ui():
             summary_df = None
                 #display raw data table inside an expander box    
         with st.expander("Raw Trial Balance Data (Parsed)"):
-            st.dataframe(df)
+            st.dataframe(df, use_container_width=True)
                 #display summary  by account with color highlighting for large amounts    
         with st.expander("Adjusted Summary by Account"):
             if summary_df is not None:
