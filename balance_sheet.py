@@ -50,17 +50,22 @@ def load_balance_sheet_file(file_bytes, file_name):
                     best_sheet = sheet
                
             df = pd.read_excel(xls, sheet_name=best_sheet, header=None)
-            header_idx = 0
-            for idx, row in df.head(12).iterrows():
-                row_text = " ".join([str(val).lower() for val in row.values if pd.notna(val)])
-                if any(k in row_text for k in ["assets", "liabilities", "equity", "balance sheet", "description", "item", "account"]):
-                    header_idx = idx
-                    break
-            if header_idx > 0:
-                df.columns = df.iloc[header_idx]
-                df = df.iloc[header_idx + 1:].reset_index(drop=True)
-            else:
-                df.columns = [f"col_{i}" for i in range(df.shape[1])]
+        df = df.dropna(how="all").reset_index(drop=True)
+        header_idx = -1
+        for idx, row in df.head(15).iterrows():
+            row_text = " ".join([str(val).lower() for val in row.values if pd.notna(val)])
+            if any(k in row_text for k in ["assets", "liabilities", "equity", "balance sheet", "description", "item", "particulars", "account"]):
+                header_idx = idx
+                break
+            
+        if header_idx > 0:
+            df.columns = [
+                str(c).strip() if pd.notna(c) else f"col_{1}"
+                for i, c in enumerate(df.iloc[header_idx])
+            ]
+            df = df.iloc[header_idx + 1:].reset_index(drop=True)
+        else:
+            df.columns = [f"col_{i}" for i in range(df.shape[1])]
            
         return df
     except Exception as e:
@@ -70,18 +75,18 @@ def load_balance_sheet_file(file_bytes, file_name):
 def parse_balance_sheet_metrics(df):
     keywords = {      
         "assets": ["total assets"],
-        "current_assets": ["total current assets"],
+        "current_assets": ["total current assets", "current assets"],
         "non-current assets": ["total fixed assets", "total non-current assets", "non-current assets"],
-        "cash": ["cash and cash equivalents", "cash"],
+        "cash": ["cash and cash equivalents", "cash", "bank balances"],
         "liabilities": ["total liabilities"],
         "current_liabilities": ["total current liabilities", "current liabilities"],
-        "equity": ["total equity"]
+        "equity": ["total equity", "owners equity", "shareholders equity"]
     }   
     data = {}
-    df = df.dropna(how='all').reset_index(drop=True)
+    df_clean = df.dropna(how='all').reset_index(drop=True)
     for key, kw_list in keywords.items():
         found_val = 0.0
-        for idx, row in df.iterrows():
+        for _, row in df_clean.iterrows():
             row_vals = [str(val).strip().lower() for val in row.values if pd.notna(val)]
             if not row_vals:
                 continue
@@ -104,30 +109,45 @@ def parse_balance_sheet_metrics(df):
     tot_liab = data.get("liabilities", 0)
     tot_equity = data.get("equity", 0)
     #checks if assets match liability and equity     
-    if tot_assets > 0 and (tot_liab > 0 or tot_equity > 0):
+    if tot_assets != 0 and (tot_liab != 0 or tot_equity != 0):
         expected_le = tot_liab + tot_equity
         if abs(tot_assets - expected_le) > 5.0:
-            validation_notes.append(f"Balance Sheet check notice: Total Assets (R{tot_assets:,.2f}) do not equal Total Liabilities & Equity (R{expected_le:,.2f}). Please check your spread sheet entries are mapped correctly.")
+            validation_notes.append(
+                f" Balance Sheet Imbalance Warning: Total Assets (R{tot_assets:,.2f})"
+                " do not equal Total Liabilities & Equity"
+                f" (R{expected_le:,.2f}). Imbalance: R{abs(tot_assets - expected_le):,.2f}"
+            )
         else:
-            validation_notes.append(f"Balance Sheet equation verified: Total Assets (R{tot_assets:,.2f}) matches Total Liabilities & Equity (R{expected_le:,.2f}).")
+            validation_notes.append(
+                f"Balance Sheet equation verified: Total Assets (R{tot_assets:,.2f}) "
+                f"matches Total Liabilities & Equity (R{expected_le:,.2f})."
+            )
     else:
         validation_notes.append(f"Balance Sheet parsed successfully.")
     data["validation_notes"] = validation_notes
     return data
 
 #PDF Generation Function for Balance Sheet
+class PDFReport(FPDF):
+    def header(self):
+        self.set_font("Arial", "B", 14)
+        self.cell(0, 10, "SA Balance Sheet Financial Health Report", ln=True, align="center")
+    def footer(self):
+        self.set_y(-15)
+        self.set_font("Arial", "I", 8)
+        self.cell(0, 10, f"Page {self.page_no()}", align="center")
+        
 def generate_balance_sheet_pdf(financial_data, health_score, current_ratio, debt_to_equity, summary_df, firm_name, client_name, entity_type, preparer_name):
-    pdf = FPDF()
+    pdf = PDFReport()
     pdf.add_page()
-    # Header Branding
-    pdf.set_font("Arial", "B", 16)
-    pdf.cell(0, 10, "SA Balance Sheet Financial Health Report", ln=True, align="center")
+    pdf.set_auto_page_break(auto=True, margin=15)
+        
     pdf.set_font("Arial", "I", 10)
-    pdf.cell(0, 6, f"Prepared by: {firm_name} | Accountant: {preparer_name}", ln=True, align="center")
-    pdf.cell(0, 6, f"Client: {client_name} {entity_type}", ln=True, align="center")
-    pdf.set_font("Arial", "", 10)
+    pdf.cell(0, 6, f"Prepared by: {firm_name} | Accountant: {preparer_name}".encode("latin-1", "replace").decode("latin=1"), ln=True, align="center")
+    pdf.cell(0, 6, f"Client: {client_name} {entity_type}".encode("latin-1", "replace").decode("latin=1"), ln=True, align="center")
+   
     pdf.cell(0, 6, "Generated by Finalizer SaaS (ZAR)", ln=True, align="center")
-    pdf.ln(8)
+    pdf.ln(6)
     # Key Financial Metrics
     pdf.set_font("Arial", "B", 12)
     pdf.cell(0, 8, "Executive Financial Summary", ln=True)
@@ -138,9 +158,9 @@ def generate_balance_sheet_pdf(financial_data, health_score, current_ratio, debt
     pdf.cell(0, 6, f"Total Assets: R {financial_data.get('assets', 0):,.2f}", ln=True)
     pdf.cell(0, 6, f"Total Liabilities: R {financial_data.get('liabilities', 0):,.2f}", ln=True)
     pdf.cell(0, 6, f"Total Equity: R {financial_data.get('equity', 0):,.2f}", ln=True)
-    pdf.ln(8)
+    pdf.ln(6)
     # Itemized Breakdown Table Header
-    if summary_df is not None:
+    if summary_df is not None and not summary_df.empty:
         pdf.set_font("Arial", "B", 12)
         pdf.cell(0, 8, "Itemized Balance Sheet Breakdown", ln=True)
         pdf.set_font("Arial", "B", 10)
@@ -150,7 +170,7 @@ def generate_balance_sheet_pdf(financial_data, health_score, current_ratio, debt
         
         pdf.set_font("Arial", "", 9)
         for _, row in summary_df.iterrows():
-            line_item = str(row.iloc[0])[:55]
+            line_item = str(row.iloc[0]).encode("latin-1", "ignore").decode("latin-1")[:55]
             amount = f"R {row.iloc[1]:,.2f}" if isinstance(row.iloc[1], (int, float)) else str(row.iloc[1])
             pdf.cell(120, 6, line_item, 1)
             pdf.cell(70, 6, amount, 1)
