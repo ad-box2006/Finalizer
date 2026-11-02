@@ -158,19 +158,19 @@ def trial_balance_ui():
                         return cols[name]
                 for name in target_names:
                     for c in cols:
-                        if name in c:
+                        if name in c or c in name:
                             return cols[c]
                 return None
             return {
-                "account": find_col(["account name", "description", "name"]),
-                "unadj_debit": find_col(["unadjusted debit"]),
-                "unadj_credit": find_col(["unadjusted credit"]),
+                "account": find_col(["account name", "account description", "description", "name", "account"]),
+                "unadj_debit": find_col(["unadjusted debit", "unadj debit"]),
+                "unadj_credit": find_col(["unadjusted credit", "unadj credit"]),
                 
                 "adj_debit": find_col(["adjustments debit", "adj debit"]),
                 "adj_credit": find_col(["adjustments credit", "adj credit"]),
                 
-                "adj_bal_debit": find_col(["adjusted debit"]),
-                "adj_bal_credit": find_col(["adjusted credit"]),
+                "adj_bal_debit": find_col(["adjusted debit", "adj debit"]),
+                "adj_bal_credit": find_col(["adjusted credit", "adj credit"]),
             }
                 
         cols = detect_cols(df)
@@ -195,54 +195,71 @@ def trial_balance_ui():
        
         account_col = cols["account"]
                 # Filter out invalid accounts
-        if account_col:
-            df = df[df[account_col].notna()].copy()
-            exclude_keywords = ["total", "status", "tip", "difference"]
-            def is_valid_account(val):
-                val_str = str(val).lower()
-                return not any(kw in val_str for kw in exclude_keywords)
-            df = df[df[account_col].apply(is_valid_account)]
+        if not account_col:
+            account_col = "Account Description"
+            df[account_col] = "[UNMAPPED / MISSING ACCOUNT NAME]"
+        df[account_col] = df[account_col].apply(
+            lambda x: "[UNMAPPED / MISSING ACCOUNT NAME]" if pd.isna(x) or str(x).strip().strip() == "" else str(x).strip()
+        )
+        has_values = (df["Adjusted_Debit"] != 0) | (df["Adjusted_Credit"] != 0)
+        df = df[has_values | (df[account_col] != "[UNMAPPED / MISSING ACCOUNT NAME]")].copy()
+        
+        subtotal_keywords = [
+            "total", "totals", "subtotal", "sub-total", "balance carried forward",
+            "b/f", "c/f", "summary", "grand total", "net income",
+            "profit/(loss)", "status", "tip", "difference"
+        ]
+        def is_invalid_row(val):
+            if pd.isna(val):
+                return True
+            val_str = str(val).lower().strip()
+            if any(kw == val_str or kw in val_str for kw in subtotal_keywords):
+                return True
+            if re.match(r"^[\-*\=_\s]+.*[\-*\=_\s]+$", val_str) and len(val_str) > 3:
+                return True
+            return False
+        df_clean = df[~df[account_col].apply(is_invalid_row)].copy()
                 # Check unusual data entries
-        neg_debits = df[df["Adjusted_Debit"] < 0]
-        neg_credits = df[df["Adjusted_Credit"] < 0]
-        zero_balances = df[(df["Adjusted_Debit"] == 0) & (df["Adjusted_Credit"] == 0)]
-        duplicate_accounts = df[df.duplicated(subset=[account_col], keep=False)] if account_col else None
+        neg_debits = df_clean[df_clean["Adjusted_Debit"] < 0]
+        neg_credits = df_clean[df_clean["Adjusted_Credit"] < 0]
+        zero_balances = df_clean[(df_clean["Adjusted_Debit"] == 0) & (df["Adjusted_Credit"] == 0)]
+        unmapped_rows = df_clean[df_clean[account_col] == "[UNMAPPED / MISSING ACCOUNT NAME]"]
                 
                 # Totals and validation
-        total_debits = df["Adjusted_Debit"].sum()
-        total_credits = df["Adjusted_Credit"].sum()
+        total_debits = df_clean["Adjusted_Debit"].sum()
+        total_credits = df_clean["Adjusted_Credit"].sum()
         difference = total_debits - total_credits
         debit_credit_ratio = (total_debits / total_credits) if total_credits > 0 else 0.0
         is_balanced = abs(difference) < 0.01
                 #group accounts together for the summary table breakdown
-        if account_col:
-            df["Net_Balance"] = df["Adjusted_Debit"] - df["Adjusted_Credit"]
-            summary_df = df.groupby(account_col).agg({
-                "Adjusted_Debit": "sum",
-                "Adjusted_Credit": "sum",
-                "Net_Balance": "sum"
-            }).reset_index()
-            summary_df.columns = [account_col, "Adjusted Debit", "Adjusted Credit", "Net Balance"]
+        
+        df_clean["Net_Balance"] = df_clean["Adjusted_Debit"] - df_clean["Adjusted_Credit"]
+        summary_df = df_clean.groupby(account_col, as_index=False).agg({
+            "Adjusted_Debit": "sum",
+            "Adjusted_Credit": "sum",
+            "Net_Balance": "sum"
+        })
+        summary_df.columns = [account_col, "Adjusted Debit", "Adjusted Credit", "Net Balance"]
             
-        else:
-            summary_df = None
-                #display raw data table inside an expander box    
-        with st.expander("Raw Trial Balance Data (Parsed)"):
-            st.dataframe(df, use_container_width=True)
-                #display summary  by account with color highlighting for large amounts    
+        
+        #display raw data table inside an expander box    
+        with st.expander("Raw Trial Balance Data (Parsed & Filtered)"):
+            st.dataframe(df_clean, use_container_width=True)
+        #display summary  by account with color highlighting for large amounts    
         with st.expander("Adjusted Summary by Account"):
             if summary_df is not None:
                 def highlight_large_values(val):
-                    color = ''
                     if isinstance(val, (int, float)) and abs(val) > 100000:
                       
                         return 'background-color: #ffcccc'
                     return ''
-                st.dataframe(summary_df.style.map(highlight_large_values))
+                st.dataframe(summary_df.style.map(highlight_large_values), use_container_width=True)
             else:
                 st.info("No account/description column found for summary.")
                 #display validation checks(warnings, totals, and balance status)        
-        with st.expander("Validation Adjustments Audits"):
+        with st.expander("Validation Adjustments & Audit Trail", expanded=True):
+            if not unmapped_rows.empty:
+                st.error(f" **Audit Exception Alert:** Found {len(unmapped_rows)} row(s) with valid balances but missing Account Description. Flagged as '[UNMAPPED / MISSING ACCOUNT NAME]' to preserve zero data loss.")
             if not neg_debits.empty:
                 st.warning(f"Found {len(neg_debits)} adjusted debit entries with negative values.")
             if not neg_credits.empty:
@@ -250,21 +267,18 @@ def trial_balance_ui():
             if not zero_balances.empty:
                 st.warning(f"Found {len(zero_balances)} adjusted entries with zero debit and credit.")
             
-            st.markdown(f"**Adjusted Total Debits:** R{total_debits:,.2f}")
-            st.markdown(f"**Adjusted Total Credits:** R{total_credits:,.2f}")
+            st.markdown(f"**Adjusted Total Debits:** R {total_debits:,.2f}")
+            st.markdown(f"**Adjusted Total Credits:** R {total_credits:,.2f}")
             st.markdown(f"**Debit-to-Credit Ratio:** {debit_credit_ratio:,.3f}")
             if is_balanced:
-                st.success("Adjusted Trial Balance is balanced.")
+                st.success(" **Adjusted Trial Balance is balanced (Debits = Credits).**")
             else:
-                st.error(f"Adjusted Trial Balance is not balanced. Difference: R{difference:,.2f}")
+                st.error(f" **Adjusted Trial Balance is out of balance. Difference: R {difference:,.2f}**")
     
                 # prepare data for downloading cleaned files
-        if account_col:
-            to_download = df[[account_col, "Adjusted_Debit", "Adjusted_Credit"]].copy()
-            to_download.columns = ["Account", "Adjusted_Debit", "Adjusted_Credit"]
-        else:
-            to_download = df[["Adjusted_Debit", "Adjusted_Credit"]].copy()
-            to_download.columns = ["Adjusted_Debit", "Adjusted_Credit"]
+        
+        to_download = df_clean[[account_col, "Adjusted_Debit", "Adjusted_Credit"]].copy()
+        to_download.columns = ["Account", "Adjusted_Debit", "Adjusted_Credit"]
         
         output = io.BytesIO()
         with pd.ExcelWriter(output, engine='openpyxl') as writer:

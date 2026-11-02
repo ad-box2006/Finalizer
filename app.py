@@ -1,5 +1,4 @@
 import trial_balance
-import balance_sheet
 import streamlit as st
 from io import BytesIO
 import time
@@ -88,7 +87,7 @@ def inject_styles():
 def privacy_and_data_control_ui():
     st.sidebar.markdown("### Privacy & Data Control")
     st.sidebar.info("""
-    - Balance sheets are processed locally and not stored permanently.
+    - Trial Balance sheets are processed locally and not stored permanently.
     - Data is encrypted and never used to train public AI models.
     """)
     st.markdown("[Privacy policy](#) | [Terms of Service](#)")
@@ -132,16 +131,11 @@ def main_app_ui():
     inject_styles()
     st.markdown('<div class="title">Finalizer</div>', unsafe_allow_html=True)
     st.markdown('<div class="subtitle">Quick document analysis</div>', unsafe_allow_html=True)
-    st.sidebar.markdown("### Upload Type")
-    upload_type = st.sidebar.radio("Select document type", ["Balance Sheet", "Trial Balance"])
     
     st.markdown("---")
     
-    if upload_type == "Trial Balance":
-        trial_balance.trial_balance_ui()
-    else:
-        balance_sheet.balance_sheet_ui()
-                     
+    trial_balance.trial_balance_ui()
+    
 def main():
     if "user_consent_time" not in st.session_state:
         st.session_state.user_consent_time = None
