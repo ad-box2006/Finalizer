@@ -17,7 +17,7 @@ st.set_page_config(
 def inject_styles():
     st.markdown("""
         <style>
-        .stApp { background: #0b1220; color: #e5eef8 !important; }
+        .stApp, [data-testid="stAppViewContainer"], [data-testid="stMain"], .main { background: #0b1220; color: #e5eef8 !important; }
         #MainMenu, footer {visibility: hidden; }
         
         section[data-testid="stSidebar"] {
@@ -48,14 +48,14 @@ def inject_styles():
         .stButton > button:hover, div.stFormSubmitButton > button:hover {
             background: #22314f;
             border-color: #35507a;
-            color: #ffffff;
+            color: #ffffff !important;
         }
         div[data-testid="stSidebar"] .stButton > button {
             background: #111827;
         }
-        input, textarea, div[data-baseweb="select"] {
-            background-color: #111827;
-            color: #e5eef8;
+        input, textarea, section[data-testid="stSidebar"], div[data-baseweb="select"] > div {
+            background-color: #111827 !important;
+            color: #e5eef8 !important;
         }
         div[data-testid="stFileUploader"] section {
             background-color: #0F172A !important;
